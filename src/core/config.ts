@@ -34,22 +34,31 @@ export function configDir(): string {
 export const DEFAULT_CONFIG: CcharnessConfig = {
   defaultProvider: "local",
   anthropic: { model: "claude-opus-4-8", apiKeyEnv: "ANTHROPIC_API_KEY" },
-  local: { baseUrl: "http://localhost:8000/v1", model: "local" },
+  local: { baseUrl: "http://localhost:11434/v1", model: "qwen3:4b" },
   marketplaces: [
+    // Canonical, richest metadata (tonsofskills / ccpi) — PRD §1.1.
     {
       name: "canonical-catalog",
-      gitUrl: "https://github.com/(tbd)/marketplace.extended.json",
+      gitUrl: "https://github.com/jeremylongshore/claude-code-plugins-plus-skills",
       kind: "canonical",
       trustDefault: "partner",
       enabled: true,
     },
+    // Anthropic-managed official directory; also one of the operator's trusted sources.
     {
-      name: "official-marketplace",
-      gitUrl: "https://github.com/anthropics/claude-code",
+      name: "claude-plugins-official",
+      gitUrl: "https://github.com/anthropics/claude-plugins-official",
       kind: "official",
       trustDefault: "official",
       enabled: true,
     },
+    // Operator's existing trusted marketplaces (from ~/.claude known_marketplaces).
+    // Standard .claude-plugin/marketplace.json shape → the `official` adapter.
+    { name: "parslee-marketplace", gitUrl: "https://github.com/Parslee-ai/claude-code-plugins", kind: "official", trustDefault: "community", enabled: true },
+    { name: "context-mode", gitUrl: "https://github.com/mksglu/context-mode", kind: "official", trustDefault: "community", enabled: true },
+    { name: "understand-anything", gitUrl: "https://github.com/Lum1104/Understand-Anything", kind: "official", trustDefault: "community", enabled: true },
+    { name: "agentmemory", gitUrl: "https://github.com/rohitg00/agentmemory", kind: "official", trustDefault: "community", enabled: true },
+    { name: "staqs", gitUrl: "https://github.com/staqsIO/terminalhire", kind: "official", trustDefault: "community", enabled: true },
   ],
   prefilterBreadth: "balanced",
 };
