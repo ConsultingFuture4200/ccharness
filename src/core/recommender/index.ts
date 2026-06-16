@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CcharnessConfig } from "../config.js";
-import { getInventory } from "../db/components.js";
+import { getComponent, getInventory } from "../db/components.js";
 import { indexVersion, type DB } from "../db/store.js";
 import type { Annotation, InventoryItem, Recommendation } from "../types.js";
 import { annotateStack } from "./conflicts.js";
@@ -161,8 +161,25 @@ export async function recommend(
   // 3. Grounding/validation — hallucinated lines dropped loudly (PRD §4.3 step 3).
   const { valid, hallucinated, stack } = validateProposal(proposal, candidates);
 
-  // 4. Conflict + context-cost annotation — hard facts (PRD §4.4).
-  const { annotations: stackAnnotations, costlyCount } = annotateStack(stack, {
+  // Build the EFFECTIVE post-action stack the operator would actually run:
+  // proposed enables+installs PLUS components already enabled in inventory, MINUS
+  // anything the proposal disables. Conflict/context-cost must reason about live
+  // inventory (PRD §4.4, §1.1) — otherwise recommending a second memory engine
+  // while one is already installed slips through. Installed items not in the
+  // index can't be reasoned about and are skipped.
+  const disabledRefs = new Set(valid.filter((l) => l.action === "disable").map((l) => l.componentRef));
+  const effectiveStack = [...stack];
+  const inStack = new Set(stack.map((c) => c.id));
+  for (const item of inventory) {
+    if (!item.enabled) continue;
+    const resolved = getComponent(db, item.componentRef);
+    if (!resolved || inStack.has(resolved.id) || disabledRefs.has(resolved.id)) continue;
+    effectiveStack.push(resolved);
+    inStack.add(resolved.id);
+  }
+
+  // 4. Conflict + context-cost annotation — hard facts over the effective stack (PRD §4.4).
+  const { annotations: stackAnnotations, costlyCount } = annotateStack(effectiveStack, {
     ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
   });
 

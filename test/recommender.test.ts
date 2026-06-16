@@ -4,6 +4,7 @@ import { upsertComponents } from "../src/core/db/components.js";
 import { openStore, type DB } from "../src/core/db/store.js";
 import { FakeProvider } from "../src/core/recommender/providers/fake.js";
 import { recommend } from "../src/core/recommender/index.js";
+import type { ModelProvider } from "../src/core/recommender/provider.js";
 import type { Component } from "../src/core/types.js";
 
 /**
@@ -85,6 +86,23 @@ describe("recommend (Milestone C integration)", () => {
     const provider = new FakeProvider();
     const rec = await recommend(db, DEFAULT_CONFIG, task, { provider });
 
+    const conflict = rec.annotations.find((a) => a.kind === "singleton");
+    expect(conflict?.severity).toBe("conflict");
+    expect(conflict?.componentRefs.sort()).toEqual(["mem-a", "mem-b"]);
+  });
+
+  it("flags a singleton conflict against ENABLED inventory, not just within the proposal (PRD §4.4, §1.1)", async () => {
+    // mem-a is installed + enabled (seedInventory). A provider that proposes ONLY
+    // mem-b (a second memory engine) must still trip the conflict — the checker
+    // reasons about the effective post-action stack, including live inventory.
+    const onlyMemB: ModelProvider = {
+      name: "scripted",
+      paid: false,
+      async propose() {
+        return { lines: [{ action: "install", componentRef: "mem-b", reason: "second memory engine" }] };
+      },
+    };
+    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider: onlyMemB });
     const conflict = rec.annotations.find((a) => a.kind === "singleton");
     expect(conflict?.severity).toBe("conflict");
     expect(conflict?.componentRefs.sort()).toEqual(["mem-a", "mem-b"]);
