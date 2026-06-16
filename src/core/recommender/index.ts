@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import type { CcharnessConfig } from "../config.js";
 import { getComponent, getInventory } from "../db/components.js";
-import { indexVersion, type DB } from "../db/store.js";
-import type { Annotation, InventoryItem, Recommendation } from "../types.js";
+import { type DB, indexVersion } from "../db/store.js";
+import {
+  type HookBasePaths,
+  hooksByComponentId,
+  readHookRegistrations,
+} from "../inventory/hooks.js";
+import type { Annotation, Component, InventoryItem, Recommendation } from "../types.js";
 import { annotateStack } from "./conflicts.js";
 import { prefilter } from "./prefilter.js";
-import { ProviderError, type ModelProvider } from "./provider.js";
+import { type ModelProvider, ProviderError } from "./provider.js";
 import { validateProposal } from "./validate.js";
 
 /**
@@ -34,6 +39,12 @@ export interface RecommendOptions {
    * true). Interface only here — the CLI supplies the actual confirm prompt.
    */
   confirmCost?: (provider: ModelProvider, candidateCount: number) => Promise<boolean> | boolean;
+  /**
+   * Injectable base paths for the real hook-matcher reader (PRD §4.4). Defaults
+   * to the operator's `~/.claude`; tests pass a temp dir so the overlay is
+   * hermetic and never reads the real machine.
+   */
+  hookBasePaths?: HookBasePaths;
 }
 
 /** Raised when the operator declines the paid-provider cost confirm (PRD §4.8). */
@@ -167,7 +178,9 @@ export async function recommend(
   // inventory (PRD §4.4, §1.1) — otherwise recommending a second memory engine
   // while one is already installed slips through. Installed items not in the
   // index can't be reasoned about and are skipped.
-  const disabledRefs = new Set(valid.filter((l) => l.action === "disable").map((l) => l.componentRef));
+  const disabledRefs = new Set(
+    valid.filter((l) => l.action === "disable").map((l) => l.componentRef),
+  );
   const effectiveStack = [...stack];
   const inStack = new Set(stack.map((c) => c.id));
   for (const item of inventory) {
@@ -178,13 +191,28 @@ export async function recommend(
     inStack.add(resolved.id);
   }
 
+  // Overlay REAL hook matchers (PRD §4.4, Hook-matchers phase). The catalog only
+  // carries event names; the matcher granularity lives in the installed plugins'
+  // own hook configs on disk (see docs/milestone-0-findings.md §2). Replace each
+  // effective-stack component's catalog hooks with its real `{event, matcher?}`
+  // list when present, keyed by component id == `<plugin>@<marketplace>` ref. A
+  // true collision (same event AND matcher across two components) then warns,
+  // while benign co-registration on the same event with different matchers does
+  // not; components without a real config keep their event-only catalog entries.
+  const realHooks = hooksByComponentId(readHookRegistrations(opts.hookBasePaths ?? {}));
+  const matchedStack: Component[] = effectiveStack.map((c) => {
+    const hooks = realHooks.get(c.id);
+    return hooks ? { ...c, bundles: { ...c.bundles, hooks } } : c;
+  });
+
   // 4. Conflict + context-cost annotation — hard facts over the effective stack (PRD §4.4).
-  const { annotations: stackAnnotations, costlyCount, tokenBudget } = annotateStack(
-    effectiveStack,
-    {
-      ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
-    },
-  );
+  const {
+    annotations: stackAnnotations,
+    costlyCount,
+    tokenBudget,
+  } = annotateStack(matchedStack, {
+    ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
+  });
 
   // Surface dropped hallucinations as a warn annotation — never hidden.
   const annotations: Annotation[] = [...stackAnnotations];

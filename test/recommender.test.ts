@@ -1,11 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG } from "../src/core/config.js";
 import { upsertComponents } from "../src/core/db/components.js";
-import { openStore, type DB } from "../src/core/db/store.js";
-import { FakeProvider } from "../src/core/recommender/providers/fake.js";
+import { type DB, openStore } from "../src/core/db/store.js";
 import { recommend } from "../src/core/recommender/index.js";
 import type { ModelProvider } from "../src/core/recommender/provider.js";
+import { FakeProvider } from "../src/core/recommender/providers/fake.js";
 import type { Component } from "../src/core/types.js";
+
+/**
+ * Keep these existing integration tests hermetic: the real hook-matcher overlay
+ * (PRD §4.4) defaults to `~/.claude`, so point it at a non-existent dir. The
+ * seeded components here use `@`-less fake ids that no real plugin ref matches,
+ * so the overlay is a no-op for them regardless — this just avoids touching the
+ * operator's machine during tests.
+ */
+const NO_HOOKS = { hookBasePaths: { claudeHome: "/nonexistent/ccharness-test" } } as const;
 
 /**
  * Milestone C integration spine (PRD §4.3, §4.4, §4.8).
@@ -30,16 +39,81 @@ function comp(over: Partial<Component> & { id: string; name: string }): Componen
 
 /** ~10 components incl. two singleton 'memory' occupants and two costly MCP. */
 const SEED: Component[] = [
-  comp({ id: "mem-a", name: "MemoryEngineA", categoryTags: ["memory"], singletonCategories: ["memory"], trustTier: "partner", description: "persistent memory plugin" }),
-  comp({ id: "mem-b", name: "MemoryEngineB", categoryTags: ["memory"], singletonCategories: ["memory"], trustTier: "community", description: "another memory plugin to remember things" }),
-  comp({ id: "mcp-slack", name: "SlackMCP", categoryTags: ["integrations"], contextCostFlag: true, trustTier: "partner", description: "slack mcp connector integration" }),
-  comp({ id: "mcp-gh", name: "GithubMCP", categoryTags: ["integrations"], contextCostFlag: true, trustTier: "official", description: "github mcp connector integration" }),
-  comp({ id: "test-tdd", name: "TddGuardrail", categoryTags: ["testing"], trustTier: "official", description: "tdd test coverage guardrail" }),
-  comp({ id: "git-flow", name: "GitFlow", categoryTags: ["git"], trustTier: "partner", description: "git commit branch workflow" }),
-  comp({ id: "review-bot", name: "ReviewBot", categoryTags: ["code-review"], trustTier: "community", description: "automated code review feedback" }),
-  comp({ id: "sec-audit", name: "SecAudit", categoryTags: ["security"], trustTier: "official", description: "security supply chain audit" }),
-  comp({ id: "ctx-mgr", name: "ContextManager", categoryTags: ["context-mgmt"], singletonCategories: ["context-mgmt"], trustTier: "partner", description: "context token window manager" }),
-  comp({ id: "fmt-out", name: "OutputStyler", categoryTags: ["output-styling"], trustTier: "community", description: "markdown output styling" }),
+  comp({
+    id: "mem-a",
+    name: "MemoryEngineA",
+    categoryTags: ["memory"],
+    singletonCategories: ["memory"],
+    trustTier: "partner",
+    description: "persistent memory plugin",
+  }),
+  comp({
+    id: "mem-b",
+    name: "MemoryEngineB",
+    categoryTags: ["memory"],
+    singletonCategories: ["memory"],
+    trustTier: "community",
+    description: "another memory plugin to remember things",
+  }),
+  comp({
+    id: "mcp-slack",
+    name: "SlackMCP",
+    categoryTags: ["integrations"],
+    contextCostFlag: true,
+    trustTier: "partner",
+    description: "slack mcp connector integration",
+  }),
+  comp({
+    id: "mcp-gh",
+    name: "GithubMCP",
+    categoryTags: ["integrations"],
+    contextCostFlag: true,
+    trustTier: "official",
+    description: "github mcp connector integration",
+  }),
+  comp({
+    id: "test-tdd",
+    name: "TddGuardrail",
+    categoryTags: ["testing"],
+    trustTier: "official",
+    description: "tdd test coverage guardrail",
+  }),
+  comp({
+    id: "git-flow",
+    name: "GitFlow",
+    categoryTags: ["git"],
+    trustTier: "partner",
+    description: "git commit branch workflow",
+  }),
+  comp({
+    id: "review-bot",
+    name: "ReviewBot",
+    categoryTags: ["code-review"],
+    trustTier: "community",
+    description: "automated code review feedback",
+  }),
+  comp({
+    id: "sec-audit",
+    name: "SecAudit",
+    categoryTags: ["security"],
+    trustTier: "official",
+    description: "security supply chain audit",
+  }),
+  comp({
+    id: "ctx-mgr",
+    name: "ContextManager",
+    categoryTags: ["context-mgmt"],
+    singletonCategories: ["context-mgmt"],
+    trustTier: "partner",
+    description: "context token window manager",
+  }),
+  comp({
+    id: "fmt-out",
+    name: "OutputStyler",
+    categoryTags: ["output-styling"],
+    trustTier: "community",
+    description: "markdown output styling",
+  }),
 ];
 
 function seedMarketplace(db: DB): void {
@@ -72,7 +146,7 @@ describe("recommend (Milestone C integration)", () => {
 
   it("drops the hallucinated line and surfaces it (PRD §4.3 step 3)", async () => {
     const provider = new FakeProvider();
-    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider });
+    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
 
     // The invented component never appears in grounded lines.
     expect(rec.lines.some((l) => l.componentRef === "ghost-plugin-does-not-exist")).toBe(false);
@@ -84,7 +158,7 @@ describe("recommend (Milestone C integration)", () => {
 
   it("flags the two-memory singleton collision as a conflict (PRD §4.4)", async () => {
     const provider = new FakeProvider();
-    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider });
+    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
 
     const conflict = rec.annotations.find((a) => a.kind === "singleton");
     expect(conflict?.severity).toBe("conflict");
@@ -99,10 +173,12 @@ describe("recommend (Milestone C integration)", () => {
       name: "scripted",
       paid: false,
       async propose() {
-        return { lines: [{ action: "install", componentRef: "mem-b", reason: "second memory engine" }] };
+        return {
+          lines: [{ action: "install", componentRef: "mem-b", reason: "second memory engine" }],
+        };
       },
     };
-    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider: onlyMemB });
+    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider: onlyMemB, ...NO_HOOKS });
     const conflict = rec.annotations.find((a) => a.kind === "singleton");
     expect(conflict?.severity).toBe("conflict");
     expect(conflict?.componentRefs.sort()).toEqual(["mem-a", "mem-b"]);
@@ -110,7 +186,7 @@ describe("recommend (Milestone C integration)", () => {
 
   it("every grounded line resolves to a real seeded component (PRD §4.3)", async () => {
     const provider = new FakeProvider();
-    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider });
+    const rec = await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
 
     const known = new Set(SEED.map((c) => c.id));
     expect(rec.lines.length).toBeGreaterThan(0);
@@ -121,11 +197,11 @@ describe("recommend (Milestone C integration)", () => {
 
   it("returns cached:true on an identical re-run with no new provider call (PRD §4.8)", async () => {
     const provider = new FakeProvider();
-    const first = await recommend(db, DEFAULT_CONFIG, task, { provider });
+    const first = await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
     expect(first.cached).toBe(false);
     expect(provider.calls).toBe(1);
 
-    const second = await recommend(db, DEFAULT_CONFIG, task, { provider });
+    const second = await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
     expect(second.cached).toBe(true);
     expect(provider.calls).toBe(1); // no new model call
     expect(second.lines).toEqual(first.lines);
@@ -133,8 +209,8 @@ describe("recommend (Milestone C integration)", () => {
 
   it("--no-cache forces a fresh provider call (PRD §4.8)", async () => {
     const provider = new FakeProvider();
-    await recommend(db, DEFAULT_CONFIG, task, { provider });
-    await recommend(db, DEFAULT_CONFIG, task, { provider, noCache: true });
+    await recommend(db, DEFAULT_CONFIG, task, { provider, ...NO_HOOKS });
+    await recommend(db, DEFAULT_CONFIG, task, { provider, noCache: true, ...NO_HOOKS });
     expect(provider.calls).toBe(2);
   });
 });
