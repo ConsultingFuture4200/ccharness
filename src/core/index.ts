@@ -15,6 +15,14 @@ export {
   configDir,
 } from "./config.js";
 export { openStore, defaultDbPath, indexVersion, getMeta, setMeta, type DB } from "./db/store.js";
+export {
+  upsertComponents,
+  getAllComponents,
+  getComponentsByCategory,
+  searchComponents,
+  getInventory,
+  type SearchOptions,
+} from "./db/components.js";
 
 // Registry (Milestone A)
 export { sync, search, type SyncReport } from "./registry/sync.js";
@@ -24,8 +32,21 @@ export { deriveContextCost, normalizeCanonical, normalizeOfficial } from "./regi
 export { scanInventory, reconcile, type ScanReport } from "./inventory/scanner.js";
 
 // Recommender (Milestone C) — the product
-export { recommend, annotateStack, prefilter, validateProposal } from "./recommender/index.js";
-export { type ModelProvider, PROPOSAL_SCHEMA } from "./recommender/provider.js";
+export {
+  recommend,
+  annotateStack,
+  prefilter,
+  validateProposal,
+  CostAbortedError,
+  type RecommendOptions,
+} from "./recommender/index.js";
+export {
+  type ModelProvider,
+  type ProposalInput,
+  ProviderError,
+  PROPOSAL_SCHEMA,
+} from "./recommender/provider.js";
+export { FakeProvider, type FakeProviderOptions } from "./recommender/providers/fake.js";
 
 // CLAUDE.md managed block (Milestone D)
 export { renderBlock, upsertBlock, writeBlockToFile, startDelimiter } from "./claudemd/block.js";

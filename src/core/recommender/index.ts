@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
 import type { CcharnessConfig } from "../config.js";
-import type { DB } from "../db/store.js";
-import type { Recommendation } from "../types.js";
-import type { ModelProvider } from "./provider.js";
+import { getInventory } from "../db/components.js";
+import { indexVersion, type DB } from "../db/store.js";
+import type { Annotation, InventoryItem, Recommendation } from "../types.js";
+import { annotateStack } from "./conflicts.js";
+import { prefilter } from "./prefilter.js";
+import { ProviderError, type ModelProvider } from "./provider.js";
+import { validateProposal } from "./validate.js";
 
 /**
  * Recommender orchestration (PRD §4.3, Milestone C) — the product.
@@ -22,20 +27,180 @@ export interface RecommendOptions {
   provider?: ModelProvider;
   /** Skip the cache read/write for a forced fresh call (PRD §4.8 `--no-cache`). */
   noCache?: boolean;
+  /**
+   * Cost-guard hook (PRD §4.8). Called BEFORE a paid provider runs; return false
+   * to abort. The local/fake provider is free, so this is never invoked for it.
+   * Bypassed entirely by `--yes` at the CLI (which passes a hook that returns
+   * true). Interface only here — the CLI supplies the actual confirm prompt.
+   */
+  confirmCost?: (provider: ModelProvider, candidateCount: number) => Promise<boolean> | boolean;
+}
+
+/** Raised when the operator declines the paid-provider cost confirm (PRD §4.8). */
+export class CostAbortedError extends Error {}
+
+/**
+ * Normalize a task string for cache keying (PRD §4.8): lowercased, whitespace
+ * collapsed, trimmed. Identical intent → identical signature → cache hit.
+ */
+function taskSignature(task: string): string {
+  const normalized = task.toLowerCase().replace(/\s+/g, " ").trim();
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+interface RecCacheRow {
+  proposal: string;
+  provider: string;
 }
 
 /**
- * TODO(Milestone C steps 1-6): orchestrate the full pipeline. Cache by
- * (task-signature + index-version + scope); invalidate on sync. Compose the
- * Recommendation from validated lines + annotateStack() output.
+ * Read a cached Recommendation for (signature, index-version, scope). The
+ * index-version in the key means a `sync` (which bumps it) implicitly
+ * invalidates the cache (PRD §4.8).
+ */
+function readCache(
+  db: DB,
+  signature: string,
+  version: string,
+  scope: string,
+): Recommendation | undefined {
+  const row = db
+    .prepare(
+      "SELECT proposal, provider FROM rec_cache WHERE task_signature = ? AND index_version = ? AND scope = ?",
+    )
+    .get(signature, version, scope) as RecCacheRow | undefined;
+  if (!row) return undefined;
+  const rec = JSON.parse(row.proposal) as Recommendation;
+  return { ...rec, cached: true };
+}
+
+/** Write-through cache on a fresh recommendation (PRD §4.8). */
+function writeCache(
+  db: DB,
+  signature: string,
+  version: string,
+  scope: string,
+  rec: Recommendation,
+): void {
+  db.prepare(
+    /* sql */ `
+    INSERT INTO rec_cache (task_signature, index_version, scope, proposal, provider, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(task_signature, index_version, scope) DO UPDATE SET
+      proposal = excluded.proposal,
+      provider = excluded.provider,
+      created_at = excluded.created_at
+  `,
+  ).run(
+    signature,
+    version,
+    scope,
+    JSON.stringify({ ...rec, cached: false }),
+    rec.provider,
+    new Date().toISOString(),
+  );
+}
+
+/**
+ * Orchestrate the full pipeline (PRD §4.3, Milestone C steps 1-6). Cache by
+ * (task-signature + index-version + scope); invalidate implicitly on `sync`.
+ * Compose the Recommendation from validated lines + annotateStack() output.
  */
 export async function recommend(
-  _db: DB,
-  _config: CcharnessConfig,
-  _task: string,
-  _opts: RecommendOptions = {},
+  db: DB,
+  config: CcharnessConfig,
+  task: string,
+  opts: RecommendOptions = {},
 ): Promise<Recommendation> {
-  throw new Error("recommend not yet implemented (Milestone C)");
+  const provider = opts.provider;
+  if (!provider) {
+    throw new ProviderError("recommend: no model provider supplied");
+  }
+
+  const scope = opts.scope ?? "system";
+  const version = indexVersion(db);
+  const signature = taskSignature(task);
+
+  // Cache read (PRD §4.8): on hit, zero provider calls.
+  if (!opts.noCache) {
+    const hit = readCache(db, signature, version, scope);
+    if (hit) return hit;
+  }
+
+  const inventory: InventoryItem[] = getInventory(db);
+
+  // 1. Deterministic pre-filter — bounds the prompt and the choice set.
+  const candidates = prefilter(db, {
+    task,
+    inventory,
+    breadth: config.prefilterBreadth,
+    ...(opts.integrations ? { integrations: opts.integrations } : {}),
+  });
+
+  // Provider-aware cost guard (PRD §4.8): only paid providers gate; free ones
+  // pass straight through. The CLI supplies the actual confirm prompt.
+  if (provider.paid && opts.confirmCost) {
+    const ok = await opts.confirmCost(provider, candidates.length);
+    if (!ok) {
+      throw new CostAbortedError("recommend: paid-provider call declined by cost guard");
+    }
+  }
+
+  // 2. LLM proposal (strict JSON, PRD §4.7). Malformed → ProviderError, loud.
+  const proposal = await provider.propose({
+    task,
+    candidates,
+    inventory,
+    flags: {
+      ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
+      ...(opts.integrations ? { integrations: opts.integrations } : {}),
+      scope,
+    },
+  });
+
+  // 3. Grounding/validation — hallucinated lines dropped loudly (PRD §4.3 step 3).
+  const { valid, hallucinated, stack } = validateProposal(proposal, candidates);
+
+  // 4. Conflict + context-cost annotation — hard facts (PRD §4.4).
+  const { annotations: stackAnnotations, costlyCount } = annotateStack(stack, {
+    ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
+  });
+
+  // Surface dropped hallucinations as a warn annotation — never hidden.
+  const annotations: Annotation[] = [...stackAnnotations];
+  if (hallucinated.length > 0) {
+    annotations.push({
+      severity: "warn",
+      kind: "command",
+      message: `Dropped ${hallucinated.length} proposed line(s) referencing unknown component(s): ${hallucinated
+        .map((l) => l.componentRef)
+        .join(", ")}. Not in the index.`,
+      componentRefs: hallucinated.map((l) => l.componentRef),
+    });
+  }
+
+  const recommendation: Recommendation = {
+    task,
+    lines: valid,
+    annotations,
+    contextCostSummary: {
+      costlyCount,
+      tightRequested: opts.tight === true,
+      ...(opts.tight && costlyCount > 1
+        ? { note: "Stack is hook-/MCP-heavy despite a tight-context request." }
+        : {}),
+    },
+    provider: provider.name,
+    cached: false,
+    indexVersion: version,
+  };
+
+  // 5. Write-through cache (PRD §4.8).
+  if (!opts.noCache) {
+    writeCache(db, signature, version, scope, recommendation);
+  }
+
+  return recommendation;
 }
 
 export { annotateStack } from "./conflicts.js";
