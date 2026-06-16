@@ -14,62 +14,83 @@ import {
 } from "../src/core/registry/normalizer.js";
 import { search, sync } from "../src/core/registry/sync.js";
 
-describe("normalizeCanonical (PRD §4.1)", () => {
-  it("maps frontmatter and derives categories + context-cost from an MCP bundle", () => {
+describe("normalizeCanonical — extended catalog real shape (PRD §4.1)", () => {
+  // One entry of the REAL `marketplace.extended.json` `plugins` ARRAY: a single
+  // `category` string, a rich `keywords` array, an OBJECT `author`, and a
+  // `components` object of INTEGER COUNTS (NOT name lists). See
+  // docs/milestone-0-findings.md §3.
+  it("uses the <name>@<marketplace> id and maps category + keywords to categories", () => {
     const raw = {
-      name: "metrc-connector",
-      description: "Metrc API integration",
-      "allowed-tools": ["mcp__metrc__list", "mcp__metrc__get"],
-      version: "1.2.0",
-      author: "umb",
+      name: "db-migrator",
+      description: "Database migration helper",
+      version: "2.0.0",
+      category: "database",
+      keywords: ["database", "testing", "ci"],
+      author: { name: "Jeremy Longshore", email: "x@y.z" },
       license: "MIT",
-      compatibility: ["claude-code"],
-      tags: ["mcp", "integration"],
-      bundles: { mcpServers: ["metrc"], skills: ["metrc-skill"] },
+      components: { skills: 1, commands: 1 }, // INTEGER counts, not names
     };
-    const c = normalizeCanonical(raw, "canonical", "partner");
-    expect(c.id).toBe("canonical:metrc-connector");
+    const c = normalizeCanonical(raw, "canonical-catalog", "partner");
+    expect(c.id).toBe("db-migrator@canonical-catalog"); // @-form, not ":"
     expect(c.trustTier).toBe("partner");
-    expect(c.categoryTags).toEqual(["integrations"]);
-    expect(c.contextCostFlag).toBe(true); // MCP server present
-    expect(c.bundles.mcpServers).toEqual(["metrc"]);
-    expect(c.bundles.hooks).toEqual([]); // catalog declares no hooks
-    expect(c.allowedTools).toHaveLength(2);
-    expect(c.version).toBe("1.2.0");
+    // database → integrations; testing + ci → testing (keyword-driven precision).
+    expect(c.categoryTags.sort()).toEqual(["integrations", "testing"]);
+    expect(c.author).toBe("Jeremy Longshore"); // pulled from the object
+    expect(c.version).toBe("2.0.0");
+    expect(c.license).toBe("MIT");
+    expect(c.contextTokens).toBeUndefined(); // no token costs in this source
   });
 
-  it("derives singletonCategories when tags land in a singleton category", () => {
-    const raw = { name: "recall", tags: ["memory", "persistence"] };
-    const c = normalizeCanonical(raw, "canonical", "community");
+  it("never invents hooks/mcp from integer counts (no fake collisions)", () => {
+    const raw = {
+      name: "hooky",
+      category: "devops",
+      keywords: ["deployment"],
+      components: { hooks: 9, total: 16 }, // integer counts only
+      mcpTools: 4, // integer count, NOT a server list
+    };
+    const c = normalizeCanonical(raw, "canonical-catalog", "partner");
+    expect(c.bundles.hooks).toEqual([]); // no event names → no hooks
+    expect(c.bundles.mcpServers).toEqual([]); // integer mcpTools is ignored
+    expect(c.bundles.skills).toEqual([]);
+    expect(c.bundles.commands).toEqual([]);
+  });
+
+  it("populates mcpServers only when a real string[] is present", () => {
+    const c = normalizeCanonical(
+      { name: "real-mcp", category: "mcp", mcpTools: ["server-a", "server-b"] },
+      "canonical-catalog",
+      "partner",
+    );
+    expect(c.bundles.mcpServers).toEqual(["server-a", "server-b"]);
+    expect(c.contextCostFlag).toBe(true); // MCP server present → costly
+  });
+
+  it("derives singletonCategories when keywords land in a singleton category", () => {
+    const c = normalizeCanonical(
+      { name: "recall", category: "memory", keywords: ["persistence"] },
+      "canonical-catalog",
+      "community",
+    );
     expect(c.categoryTags).toEqual(["memory"]);
     expect(c.singletonCategories).toEqual(["memory"]); // memory is a singleton
-    expect(c.contextCostFlag).toBe(false); // lazily-loaded skill, no MCP/hook
+    expect(c.contextCostFlag).toBe(false); // no MCP/hook, no token costs
   });
 
-  it("flags context-cost when allowed-tools breadth is large", () => {
-    const raw = {
-      name: "broad-tool",
-      tags: ["domain"],
-      "allowed-tools": Array.from({ length: 10 }, (_, i) => `tool${i}`),
-    };
-    const c = normalizeCanonical(raw, "canonical", "community");
-    expect(c.contextCostFlag).toBe(true);
-  });
-
-  it("drops unrecognized tags rather than inventing a category", () => {
+  it("drops unrecognized keywords rather than inventing a category", () => {
     const c = normalizeCanonical(
-      { name: "x", tags: ["totally-unknown"] },
-      "canonical",
+      { name: "x", category: "totally-unknown", keywords: ["also-unknown"] },
+      "canonical-catalog",
       "community",
     );
     expect(c.categoryTags).toEqual([]);
   });
 
   it("throws NormalizeError on a malformed entry (missing name)", () => {
-    expect(() => normalizeCanonical({ description: "no name" }, "canonical", "community")).toThrow(
-      NormalizeError,
-    );
-    expect(() => normalizeCanonical(null, "canonical", "community")).toThrow(NormalizeError);
+    expect(() =>
+      normalizeCanonical({ description: "no name" }, "canonical-catalog", "community"),
+    ).toThrow(NormalizeError);
+    expect(() => normalizeCanonical(null, "canonical-catalog", "community")).toThrow(NormalizeError);
   });
 });
 
@@ -79,6 +100,8 @@ describe("normalizeOfficial (PRD §4.1)", () => {
       { name: "gh-tools", category: "git", keywords: ["review"] },
       "official",
     );
+    // @-form id matches the installed-plugin ref so `status` can resolve it.
+    expect(c.id).toBe("gh-tools@official");
     expect(c.trustTier).toBe("official");
     expect(c.categoryTags.sort()).toEqual(["code-review", "git"]);
     expect(c.bundles.hooks).toEqual([]);
@@ -280,6 +303,11 @@ describe("sync + search (PRD §4.1, §8)", () => {
     const all = getAllComponents(db);
     expect(all.map((c) => c.name).sort()).toEqual(["ctx-mgr", "mem-engine"]);
     expect(all.every((c) => c.lastSynced != null)).toBe(true);
+    // Array-shaped canonical source: ids take the <name>@<marketplace> form.
+    expect(all.map((c) => c.id).sort()).toEqual([
+      "ctx-mgr@test-catalog",
+      "mem-engine@test-catalog",
+    ]);
   });
 
   it("search filters by category key and numeric id", async () => {

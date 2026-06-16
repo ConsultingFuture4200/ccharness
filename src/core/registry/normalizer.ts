@@ -143,37 +143,46 @@ function asStringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === "string");
 }
 
-/** A canonical-catalog entry as it appears in `marketplace.extended.json`. */
+/**
+ * One ENTRY in the canonical extended catalog's top-level `plugins` ARRAY
+ * (`marketplace.extended.json`, jeremylongshore, 448 entries). Keys mirror the
+ * REAL observed shape (docs/milestone-0-findings.md §3): `category` (string),
+ * `keywords` (98% coverage — the rich category-precision signal), `author` is
+ * an OBJECT `{name,email}`, `license`/`version`/`repository` where present.
+ *
+ * Critical real-shape facts that bound what we can map:
+ * - `components` is an OBJECT of INTEGER COUNTS (`{skills:1, commands:1, ...}`),
+ *   NOT name lists — so real bundle names cannot be recovered from it.
+ * - `mcpTools` is an INTEGER COUNT too, NOT a server-name list — so real
+ *   mcpServers cannot be recovered from it either.
+ */
 interface CanonicalEntry {
   name?: unknown;
   description?: unknown;
-  "allowed-tools"?: unknown;
-  allowedTools?: unknown;
   version?: unknown;
+  /** Object `{name,email,url}` in this source (NOT a bare string). */
   author?: unknown;
   license?: unknown;
-  compatibility?: unknown;
+  /** Single category string (present on 100% of entries). */
+  category?: unknown;
+  /** Rich free-text keyword array — the primary category-mapping signal. */
+  keywords?: unknown;
+  /** Rare free-text tag array (1/448 entries) — folded in when present. */
   tags?: unknown;
-  bundles?: {
-    skills?: unknown;
-    commands?: unknown;
-    hooks?: unknown;
-    mcpServers?: unknown;
-  };
+  /** Integer COUNTS per component kind — never name lists in this source. */
+  components?: unknown;
+  /** Integer COUNT of MCP tools — never a server-name list in this source. */
+  mcpTools?: unknown;
 }
 
-/** Normalize the hooks array, keeping only well-formed {event, matcher?} entries. */
-function normalizeHooks(value: unknown): ComponentBundles["hooks"] {
-  if (!Array.isArray(value)) return [];
-  const hooks: ComponentBundles["hooks"] = [];
-  for (const h of value) {
-    if (h && typeof h === "object" && typeof (h as { event?: unknown }).event === "string") {
-      const event = (h as { event: string }).event;
-      const matcher = (h as { matcher?: unknown }).matcher;
-      hooks.push(typeof matcher === "string" ? { event, matcher } : { event });
-    }
+/** Pull a display name from an author that may be a string or `{name}` object. */
+function authorName(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  if (value && typeof value === "object") {
+    const name = (value as { name?: unknown }).name;
+    if (typeof name === "string" && name.trim() !== "") return name.trim();
   }
-  return hooks;
+  return undefined;
 }
 
 /**
@@ -230,18 +239,32 @@ function buildComponent(args: {
 }
 
 /**
- * Canonical-catalog ingester (PRD §4.1, Milestone A step 2).
+ * Canonical-extended ingester (PRD §4.1, Milestone A step 2).
  *
- * Maps the enforced frontmatter
- * (name / description / allowed-tools / version / author / license /
- * compatibility / tags) straight into Component, mapping `tags` onto the 13-key
- * taxonomy and deriving singleton categories + context-cost. `name` is
- * required; a missing/blank name is malformed and throws so the caller can
- * skip-loud (PRD §8).
+ * Maps ONE entry of the canonical extended catalog's `plugins` ARRAY
+ * (`marketplace.extended.json`, jeremylongshore) into a Component. This is the
+ * REAL shape confirmed by docs/milestone-0-findings.md §3 — NOT the earlier
+ * assumed frontmatter shape (which had `allowed-tools`/structured `bundles`/a
+ * string `author`; none of those exist in this source).
  *
- * NOTE: the catalog does not declare hooks at event+matcher granularity, so
- * `bundles.hooks` is left empty unless the source ships a structured `bundles`
- * block — see the returned notes for this known gap.
+ * Category precision (the win this adapter exists for): `category` + `keywords`
+ * + `tags` are fed through `tagsToCategories()`. `keywords` carries ~98%
+ * coverage of rich free-text signal, materially better than the local cache's
+ * coarse `category`-only mapping.
+ *
+ * HONEST LIMITS of this source (do NOT invent data, PRD §8):
+ * - `components` is an OBJECT of INTEGER COUNTS, not name lists — so bundle
+ *   skills/commands cannot be enumerated; `bundles.skills`/`commands` stay [].
+ * - `components.hooks` (when present) is an integer count with NO event names —
+ *   so `bundles.hooks` stays [] (no fake hook collisions, per findings §2).
+ * - `mcpTools` is an INTEGER COUNT, not a server list — so `mcpServers` is only
+ *   populated if a real string[] turns up; an integer is ignored.
+ * - no per-model token costs in this source → `contextTokens` undefined.
+ *
+ * id is the `<name>@<marketplaceId>` form (e.g. `<name>@canonical-catalog`) so
+ * it matches the installed-plugin ref form used in Milestone B reconciliation.
+ * `name` is required; a missing/blank name is malformed and throws so the
+ * caller can skip-loud (PRD §8).
  */
 export function normalizeCanonical(
   raw: unknown,
@@ -257,29 +280,32 @@ export function normalizeCanonical(
   }
   const name = entry.name.trim();
 
-  const allowedToolsRaw = entry["allowed-tools"] ?? entry.allowedTools;
-  const allowedTools = allowedToolsRaw != null ? asStringArray(allowedToolsRaw) : undefined;
+  // Category-precision signal: category + keywords + tags (keywords is richest).
+  const tags: string[] = [];
+  if (typeof entry.category === "string") tags.push(entry.category);
+  tags.push(...asStringArray(entry.keywords));
+  tags.push(...asStringArray(entry.tags));
 
+  // Bundles are best-effort ONLY. This source carries integer counts, not name
+  // lists, so the lists stay empty; mcpServers is filled solely if a real
+  // string[] is present (never from the `mcpTools` integer count).
   const bundles: ComponentBundles = {
     ...EMPTY_BUNDLES,
-    skills: asStringArray(entry.bundles?.skills),
-    commands: asStringArray(entry.bundles?.commands),
-    hooks: normalizeHooks(entry.bundles?.hooks),
-    mcpServers: asStringArray(entry.bundles?.mcpServers),
+    mcpServers: asStringArray(entry.mcpTools),
   };
 
   return buildComponent({
-    id: `${marketplaceId}:${name}`,
+    id: `${name}@${marketplaceId}`,
     name,
     marketplaceId,
     trustTier: trust,
     description: typeof entry.description === "string" ? entry.description : undefined,
-    tags: asStringArray(entry.tags),
+    tags,
     bundles,
-    compatibility: asStringArray(entry.compatibility),
-    allowedTools: allowedTools && allowedTools.length > 0 ? allowedTools : undefined,
+    compatibility: [],
+    allowedTools: undefined,
     version: typeof entry.version === "string" ? entry.version : undefined,
-    author: typeof entry.author === "string" ? entry.author : undefined,
+    author: authorName(entry.author),
     license: typeof entry.license === "string" ? entry.license : undefined,
   });
 }
@@ -303,6 +329,11 @@ interface OfficialEntry {
  * shape carries no structured bundles, so `bundles` is empty and context-cost
  * derives to false unless tags/keywords map to a costly category. Tags are read
  * from `category` / `keywords` / `tags`, whichever the entry provides.
+ *
+ * id is the `<name>@<marketplace>` form — the SAME form an installed plugin ref
+ * uses (`enabledPlugins` keys, inventory scanner) — so the operator's installed
+ * plugins resolve against the index in `status` (was `:`-joined, which never
+ * matched). Mirrors the canonical/local-cache adapters (PRD §4.1, Milestone B).
  */
 export function normalizeOfficial(raw: unknown, marketplaceId: string): Component {
   if (!raw || typeof raw !== "object") {
@@ -320,7 +351,7 @@ export function normalizeOfficial(raw: unknown, marketplaceId: string): Componen
   tags.push(...asStringArray(entry.tags));
 
   return buildComponent({
-    id: `${marketplaceId}:${name}`,
+    id: `${name}@${marketplaceId}`,
     name,
     marketplaceId,
     trustTier: "official",

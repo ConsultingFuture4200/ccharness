@@ -51,29 +51,31 @@ export const DEFAULT_CONFIG: CcharnessConfig = {
       trustDefault: "community",
       enabled: true,
     },
-    // Remote sources are DISABLED by default (enabled:false) pending verification.
-    // The Milestone-0 run found two things: (1) a `gitUrl` must be the RAW
-    // marketplace.json, not a GitHub repo page (a repo page returns HTML and the
-    // source skips-loud); the canonical raw path below is confirmed. (2) Each
-    // marketplace's JSON shape needs its adapter verified before enabling — the
-    // canonical file is a 448-entry ARRAY with rich `keywords` (better category
-    // mapping than the local cache), so it needs an adapter pass. Until then the
-    // local-cli-cache above is the working primary. See docs/milestone-0-findings.md.
+    // Canonical extended catalog (jeremylongshore, 448-entry `plugins` ARRAY).
+    // ENABLED: the raw extended.json URL is confirmed-live and the canonical
+    // adapter now maps its REAL shape (category + rich `keywords`, ~98% coverage)
+    // — the category-precision supplement over the local cache's coarse
+    // `category`-only signal (docs/milestone-0-findings.md §3). Token costs are
+    // absent here, so the local cache stays primary for context-cost numbers.
     {
       name: "canonical-catalog",
       gitUrl:
         "https://raw.githubusercontent.com/jeremylongshore/claude-code-plugins-plus-skills/main/.claude-plugin/marketplace.extended.json",
       kind: "canonical",
       trustDefault: "partner",
-      enabled: false,
+      enabled: true,
     },
     // Operator's other trusted marketplaces (from ~/.claude known_marketplaces).
     // NONE are in the local cache, so their installed plugins won't resolve until
-    // these are enabled with correct raw .claude-plugin/marketplace.json URLs.
-    { name: "parslee-marketplace", gitUrl: "https://raw.githubusercontent.com/Parslee-ai/claude-code-plugins/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: false },
-    { name: "context-mode", gitUrl: "https://raw.githubusercontent.com/mksglu/context-mode/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: false },
-    { name: "understand-anything", gitUrl: "https://raw.githubusercontent.com/Lum1104/Understand-Anything/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: false },
-    { name: "agentmemory", gitUrl: "https://raw.githubusercontent.com/rohitg00/agentmemory/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: false },
+    // enabled here. Each raw .claude-plugin/marketplace.json URL was curl-verified
+    // (branch `main`): the four below return a JSON `plugins` array and are
+    // ENABLED; `staqs` 404s at every probed path/branch and stays disabled.
+    { name: "parslee-marketplace", gitUrl: "https://raw.githubusercontent.com/Parslee-ai/claude-code-plugins/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: true },
+    { name: "context-mode", gitUrl: "https://raw.githubusercontent.com/mksglu/context-mode/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: true },
+    { name: "understand-anything", gitUrl: "https://raw.githubusercontent.com/Lum1104/Understand-Anything/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: true },
+    { name: "agentmemory", gitUrl: "https://raw.githubusercontent.com/rohitg00/agentmemory/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: true },
+    // staqs: raw marketplace.json 404s on main & master (repo private or path
+    // differs). Left disabled until a working raw URL is confirmed.
     { name: "staqs", gitUrl: "https://raw.githubusercontent.com/staqsIO/terminalhire/main/.claude-plugin/marketplace.json", kind: "official", trustDefault: "community", enabled: false },
   ],
   prefilterBreadth: "balanced",
