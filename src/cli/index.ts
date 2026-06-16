@@ -1,10 +1,15 @@
 #!/usr/bin/env node
+import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
-import { loadConfig } from "../core/config.js";
-import { openStore } from "../core/db/store.js";
+import { type ProviderName, loadConfig } from "../core/config.js";
+import { getComponent } from "../core/db/components.js";
+import { type DB, openStore } from "../core/db/store.js";
 import { reconcile, scanInventory } from "../core/inventory/scanner.js";
+import { selectProvider } from "../core/recommender/factory.js";
+import { CostAbortedError, recommend } from "../core/recommender/index.js";
+import type { ModelProvider } from "../core/recommender/provider.js";
 import { search, sync } from "../core/registry/sync.js";
-import type { Component, InventoryItem, Scope } from "../core/types.js";
+import type { Annotation, Component, InventoryItem, Recommendation, Scope } from "../core/types.js";
 
 /**
  * `ccharness` CLI (PRD §5) — thin wrapper over `@ccharness/core`. Source of
@@ -84,7 +89,50 @@ program
   .option("--yes", "bypass the paid-provider cost confirm")
   .option("--no-cache", "force a fresh model call")
   .description("the product: what to enable/install/disable, with reasons (PRD §4.3)")
-  .action(() => notImplemented("recommend", "Milestone C"));
+  .action(async (task: string, opts: RecommendCliOptions) => {
+    const db = openStore();
+    const config = loadConfig();
+
+    let provider: ModelProvider;
+    try {
+      provider = selectProvider(config, opts.provider);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+      return;
+    }
+
+    const scope: Scope = opts.scope === "project" ? "project" : "system";
+    const integrations =
+      opts.integrations != null
+        ? opts.integrations
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+        : undefined;
+
+    try {
+      const rec = await recommend(db, config, task, {
+        scope,
+        ...(opts.tight ? { tight: true } : {}),
+        ...(integrations ? { integrations } : {}),
+        provider,
+        // commander sets `cache: false` for --no-cache; default true.
+        noCache: opts.cache === false,
+        // Paid-provider cost guard (PRD §4.8): confirm unless --yes.
+        confirmCost: (p, candidateCount) => confirmCost(p, candidateCount, opts.yes === true),
+      });
+      printRecommendation(db, rec);
+    } catch (err) {
+      if (err instanceof CostAbortedError) {
+        console.error("recommend: aborted — paid-provider call declined.");
+        process.exitCode = 1;
+        return;
+      }
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("gen-claudemd")
@@ -137,6 +185,120 @@ function formatInventoryItem(item: InventoryItem): string {
     provides = `${item.resolved.trustTier} — ${cats}${cost}`;
   }
   return `${state} ${item.componentRef}  (${provides})`;
+}
+
+/** Parsed `recommend` flags. commander maps --no-cache to `cache: false`. */
+interface RecommendCliOptions {
+  scope?: string;
+  tight?: boolean;
+  integrations?: string;
+  provider?: ProviderName;
+  yes?: boolean;
+  cache?: boolean;
+}
+
+/** Coarse per-candidate token budget for the pre-call estimate (PRD §4.8). */
+const EST_TOKENS_PER_CANDIDATE = 60;
+const EST_PROMPT_OVERHEAD_TOKENS = 200;
+
+/**
+ * Paid-provider cost guard (PRD §4.8): show an order-of-magnitude token estimate
+ * and require an interactive y/N confirm. Free providers never reach here (the
+ * recommender only calls this hook for `provider.paid`). `--yes` bypasses.
+ *
+ * The estimate is intentionally coarse — the exact prompt isn't built until
+ * inside `recommend`, and the guard only needs to set expectations, not bill.
+ */
+async function confirmCost(
+  provider: ModelProvider,
+  candidateCount: number,
+  yes: boolean,
+): Promise<boolean> {
+  const estTokens = EST_PROMPT_OVERHEAD_TOKENS + candidateCount * EST_TOKENS_PER_CANDIDATE;
+  console.error(
+    `Paid provider "${provider.name}": ~${estTokens} input tokens over ${candidateCount} candidate(s) (estimate).`,
+  );
+  if (yes) return true;
+  if (!process.stdin.isTTY) {
+    console.error("recommend: not a TTY and --yes not given; declining paid call.");
+    return false;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question("Proceed with the paid call? [y/N] ")).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Print a grounded recommendation (PRD §4.3, §4.4). Each enable/install/disable
+ * line carries its reason AND an inline trust-tier + MCP/hook surface marker —
+ * a cheap mitigation for the §10 persuasion risk: the fluent reason sits next to
+ * the hard facts (who vouches for it, what it costs your context). Then the
+ * conflict/context-cost annotations and the context-cost summary.
+ */
+function printRecommendation(db: DB, rec: Recommendation): void {
+  console.log(`Task: ${rec.task}`);
+  console.log(
+    `Provider: ${rec.provider}${rec.cached ? " (cached)" : ""}  index: ${rec.indexVersion}`,
+  );
+
+  if (rec.lines.length === 0) {
+    console.log("\nNo actions recommended.");
+  } else {
+    console.log("\nRecommended actions:");
+    for (const line of rec.lines) {
+      console.log(`  ${formatRecLine(db, line.action, line.componentRef, line.reason)}`);
+    }
+  }
+
+  if (rec.annotations.length > 0) {
+    console.log("\nConflicts & context cost:");
+    for (const a of rec.annotations) {
+      console.log(`  ${formatAnnotation(a)}`);
+    }
+  }
+
+  const s = rec.contextCostSummary;
+  console.log("\nContext-cost summary:");
+  console.log(
+    `  ${s.costlyCount} context-costly component(s) in the proposed stack${s.tightRequested ? " (tight context requested)" : ""}.`,
+  );
+  if (s.note) console.log(`  ${s.note}`);
+}
+
+/**
+ * One recommendation line: verb, ref, the trust-tier + MCP/hook surface marker
+ * joined from the index (the §10 mitigation), then the model's reason.
+ */
+function formatRecLine(db: DB, action: string, componentRef: string, reason: string): string {
+  const verb = action.toUpperCase().padEnd(7);
+  const marker = surfaceMarker(getComponent(db, componentRef));
+  return `${verb} ${componentRef}  ${marker}\n            ${reason}`;
+}
+
+/**
+ * Inline trust-tier + surface marker for a component (PRD §10 mitigation): trust
+ * tier, MCP-server count, and hook count — the hard surface a persuasive reason
+ * must be weighed against. "[unknown — not in index]" when it doesn't resolve.
+ */
+function surfaceMarker(c: Component | undefined): string {
+  if (!c) return "[unknown — not in index]";
+  const parts = [`trust:${c.trustTier}`];
+  const mcp = c.bundles.mcpServers.length;
+  const hooks = c.bundles.hooks.length;
+  if (mcp > 0) parts.push(`mcp:${mcp}`);
+  if (hooks > 0) parts.push(`hooks:${hooks}`);
+  if (c.contextCostFlag) parts.push("context-costly");
+  return `[${parts.join(" ")}]`;
+}
+
+/** One annotation line with a severity marker (PRD §4.4). */
+function formatAnnotation(a: Annotation): string {
+  const tag = a.severity === "conflict" ? "CONFLICT" : a.severity === "warn" ? "warn" : "info";
+  return `[${tag}] (${a.kind}) ${a.message}`;
 }
 
 function notImplemented(cmd: string, milestone: string): never {

@@ -67,6 +67,13 @@ export {
   PROPOSAL_SCHEMA,
 } from "./recommender/provider.js";
 export { FakeProvider, type FakeProviderOptions } from "./recommender/providers/fake.js";
+export {
+  anthropicProvider,
+  type AnthropicProviderOptions,
+} from "./recommender/providers/anthropic.js";
+export { localProvider, type LocalProviderOptions } from "./recommender/providers/local.js";
+export { selectProvider } from "./recommender/factory.js";
+export { estimateInputTokens } from "./recommender/providers/shared.js";
 
 // CLAUDE.md managed block (Milestone D)
 export { renderBlock, upsertBlock, writeBlockToFile, startDelimiter } from "./claudemd/block.js";

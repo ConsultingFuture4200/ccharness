@@ -49,13 +49,3 @@ export const PROPOSAL_SCHEMA = {
     },
   },
 } as const;
-
-/** TODO(Milestone C step 2): Anthropic adapter (paid). Strict JSON via tool/response_format. */
-export function anthropicProvider(_cfg: { model: string; apiKeyEnv: string }): ModelProvider {
-  throw new ProviderError("anthropicProvider not yet implemented (Milestone C)");
-}
-
-/** TODO(Milestone C step 2): local OpenAI-compatible adapter (free). The 3090 rig. */
-export function localProvider(_cfg: { baseUrl: string; model: string }): ModelProvider {
-  throw new ProviderError("localProvider not yet implemented (Milestone C)");
-}
