@@ -17,7 +17,12 @@ import { getComponent } from "../core/db/components.js";
 import { type DB, openStore } from "../core/db/store.js";
 import { reconcile, scanInventory } from "../core/inventory/scanner.js";
 import { selectProvider } from "../core/recommender/factory.js";
-import { CostAbortedError, recommend } from "../core/recommender/index.js";
+import {
+  CostAbortedError,
+  annotateStack,
+  formatTokens,
+  recommend,
+} from "../core/recommender/index.js";
 import type { ModelProvider } from "../core/recommender/provider.js";
 import { search, sync } from "../core/registry/sync.js";
 import type { Annotation, Component, InventoryItem, Recommendation, Scope } from "../core/types.js";
@@ -84,7 +89,7 @@ program
     if (items.length === 0) {
       console.log("no installed components found");
     } else {
-      printStatus(items);
+      printStatus(db, items);
     }
     for (const u of report.unreadable) {
       console.log(`! unreadable: ${u.file} (${u.reason})`);
@@ -280,7 +285,7 @@ function formatResult(c: Component): string {
  * what each component provides (category tags from the index), and a clear
  * marker for items not in the index.
  */
-function printStatus(items: InventoryItem[]): void {
+function printStatus(db: DB, items: InventoryItem[]): void {
   const scopes: Scope[] = ["system", "project"];
   for (const scope of scopes) {
     const group = items.filter((i) => i.scope === scope);
@@ -289,6 +294,23 @@ function printStatus(items: InventoryItem[]): void {
     for (const item of group) {
       console.log(`  ${formatInventoryItem(item)}`);
     }
+  }
+
+  // Context-cost total over the enabled, index-resolved stack (PRD §4.1): sum the
+  // declared always-on token cost where known, mirroring the recommend summary.
+  const enabledStack: Component[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!item.enabled || seen.has(item.componentRef)) continue;
+    seen.add(item.componentRef);
+    const resolved = getComponent(db, item.componentRef);
+    if (resolved) enabledStack.push(resolved);
+  }
+  const { costlyCount, tokenBudget } = annotateStack(enabledStack);
+  if (costlyCount > 0) {
+    const tokenNote =
+      tokenBudget != null ? ` (context: ~${formatTokens(tokenBudget)} always-on tokens)` : "";
+    console.log(`\n${costlyCount} context-costly enabled component(s)${tokenNote}.`);
   }
 }
 
@@ -423,8 +445,10 @@ function printRecommendation(db: DB, rec: Recommendation): void {
 
   const s = rec.contextCostSummary;
   console.log("\nContext-cost summary:");
+  const tokenNote =
+    s.tokenBudget != null ? ` (context: ~${formatTokens(s.tokenBudget)} always-on tokens)` : "";
   console.log(
-    `  ${s.costlyCount} context-costly component(s) in the proposed stack${s.tightRequested ? " (tight context requested)" : ""}.`,
+    `  ${s.costlyCount} context-costly component(s) in the proposed stack${s.tightRequested ? " (tight context requested)" : ""}${tokenNote}.`,
   );
   if (s.note) console.log(`  ${s.note}`);
 }

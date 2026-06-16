@@ -179,9 +179,12 @@ export async function recommend(
   }
 
   // 4. Conflict + context-cost annotation — hard facts over the effective stack (PRD §4.4).
-  const { annotations: stackAnnotations, costlyCount } = annotateStack(effectiveStack, {
-    ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
-  });
+  const { annotations: stackAnnotations, costlyCount, tokenBudget } = annotateStack(
+    effectiveStack,
+    {
+      ...(opts.tight !== undefined ? { tight: opts.tight } : {}),
+    },
+  );
 
   // Surface dropped hallucinations as a warn annotation — never hidden.
   const annotations: Annotation[] = [...stackAnnotations];
@@ -203,6 +206,7 @@ export async function recommend(
     contextCostSummary: {
       costlyCount,
       tightRequested: opts.tight === true,
+      ...(tokenBudget != null ? { tokenBudget } : {}),
       ...(opts.tight && costlyCount > 1
         ? { note: "Stack is hook-/MCP-heavy despite a tight-context request." }
         : {}),
@@ -220,6 +224,6 @@ export async function recommend(
   return recommendation;
 }
 
-export { annotateStack } from "./conflicts.js";
+export { annotateStack, formatTokens } from "./conflicts.js";
 export { prefilter } from "./prefilter.js";
 export { validateProposal } from "./validate.js";

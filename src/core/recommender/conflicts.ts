@@ -14,7 +14,7 @@ import type { Annotation, Component } from "../types.js";
 export function annotateStack(
   stack: Component[],
   opts: { tight?: boolean } = {},
-): { annotations: Annotation[]; costlyCount: number } {
+): { annotations: Annotation[]; costlyCount: number; tokenBudget?: number } {
   const annotations: Annotation[] = [];
 
   // Singleton-category collisions.
@@ -80,21 +80,37 @@ export function annotateStack(
     }
   }
 
-  // Context-cost summary.
+  // Context-cost summary. Sum the declared always-on token cost across the
+  // costly components for a quantitative budget (PRD §4.1) where it is known;
+  // undefined when no costly component declares a token cost.
   const costly = stack.filter((c) => c.contextCostFlag);
+  const tokenValues = costly
+    .map((c) => c.contextTokens)
+    .filter((t): t is number => typeof t === "number");
+  const tokenBudget =
+    tokenValues.length > 0 ? tokenValues.reduce((sum, t) => sum + t, 0) : undefined;
   if (costly.length > 0) {
     const note = opts.tight
       ? "Task requested tight context, but the stack is hook-/MCP-heavy."
       : undefined;
+    const budget = tokenBudget != null ? ` ~${formatTokens(tokenBudget)} always-on tokens.` : "";
     annotations.push({
       severity: opts.tight && costly.length > 1 ? "warn" : "info",
       kind: "context-cost",
       message:
         `${costly.length} context-costly component(s): ${costly.map((c) => c.name).join(", ")}.` +
+        budget +
         (note ? ` ${note}` : ""),
       componentRefs: costly.map((c) => c.id),
     });
   }
 
-  return { annotations, costlyCount: costly.length };
+  return tokenBudget != null
+    ? { annotations, costlyCount: costly.length, tokenBudget }
+    : { annotations, costlyCount: costly.length };
+}
+
+/** Render a token count compactly (e.g. 12345 → "12k", 800 → "800") for summaries. */
+export function formatTokens(tokens: number): string {
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
