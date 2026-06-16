@@ -77,3 +77,18 @@ export { estimateInputTokens } from "./recommender/providers/shared.js";
 
 // CLAUDE.md managed block (Milestone D)
 export { renderBlock, upsertBlock, writeBlockToFile, startDelimiter } from "./claudemd/block.js";
+export {
+  stackFromRecommendation,
+  readLatestRecommendation,
+  parseBlockVersion,
+  bumpPatch,
+  nextBlockVersion,
+  installComponents,
+  enabledRefsFromInventory,
+  defaultClaudeMdPath,
+  defaultInstallRunner,
+  InstallUnavailableError,
+  type ChosenStack,
+  type InstallResult,
+  type InstallRunner,
+} from "./claudemd/gen.js";

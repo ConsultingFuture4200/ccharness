@@ -1,6 +1,17 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
+import { renderBlock, writeBlockToFile } from "../core/claudemd/block.js";
+import {
+  InstallUnavailableError,
+  defaultClaudeMdPath,
+  enabledRefsFromInventory,
+  installComponents,
+  nextBlockVersion,
+  readLatestRecommendation,
+  stackFromRecommendation,
+} from "../core/claudemd/gen.js";
 import { type ProviderName, loadConfig } from "../core/config.js";
 import { getComponent } from "../core/db/components.js";
 import { type DB, openStore } from "../core/db/store.js";
@@ -138,9 +149,92 @@ program
   .command("gen-claudemd")
   .option("--scope <scope>", "system | project")
   .option("--path <file>", "target CLAUDE.md path")
+  .option("--from-recommend <task>", "derive the stack from a prior `recommend <task>` run")
+  .option("--components <list>", "comma-separated component refs to enable (overrides derivation)")
   .option("--write", "perform the in-place managed-block update (default: print to stdout)")
+  .option("--install", "also shell out to `claude plugin install` for accepted install lines")
+  .option("--yes", "bypass the --install confirm prompt")
   .description("emit the managed block; review-first by default (PRD §4.5)")
-  .action(() => notImplemented("gen-claudemd", "Milestone D"));
+  .action(async (opts: GenClaudeMdCliOptions) => {
+    const db = openStore();
+    const config = loadConfig();
+    const scope: Scope = opts.scope === "project" ? "project" : "system";
+    const path = opts.path ?? defaultClaudeMdPath(scope, config);
+
+    // 1. Choose the stack: explicit --components, else --from-recommend, else
+    //    the currently enabled inventory for the scope (PRD §4.5).
+    let enabled: string[];
+    let install: string[] = [];
+    if (opts.components != null) {
+      enabled = splitList(opts.components);
+    } else if (opts.fromRecommend != null) {
+      const rec = readLatestRecommendation(db, opts.fromRecommend, scope);
+      if (!rec) {
+        console.error(
+          `gen-claudemd: no cached recommendation for "${opts.fromRecommend}" (scope ${scope}). Run \`ccharness recommend\` first.`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const chosen = stackFromRecommendation(rec);
+      enabled = chosen.enabled;
+      install = chosen.install;
+    } else {
+      enabled = enabledRefsFromInventory(db, scope);
+    }
+
+    // 2. Render the block at the next version (bump if a block already exists).
+    const version = nextBlockVersion(path, program.version() ?? "0.7.0");
+    const block = renderBlock(version, enabled);
+
+    if (!opts.write) {
+      // Review-first default: print to stdout, no state change (PRD §4.5, §8).
+      console.log(block);
+      if (install.length > 0) {
+        console.error(
+          `\n(${install.length} install line(s): ${install.join(", ")}. Re-run with --write --install to act.)`,
+        );
+      }
+      return;
+    }
+
+    // 3. --write: byte-safe managed-block update via the tested writer.
+    const existedBefore = existsSync(path);
+    const result = writeBlockToFile(path, block);
+    const backupNote = existedBefore ? ` (backup at ${path}.bak)` : " (new file)";
+    console.error(`gen-claudemd: ${result.mode} block v${version} in ${path}${backupNote}`);
+
+    // 4. Optional install shell-out (UMB-140), behind an explicit confirm.
+    if (opts.install && install.length > 0) {
+      const ok = await confirmInstall(install, opts.yes === true);
+      if (!ok) {
+        console.error("gen-claudemd: install declined.");
+        return;
+      }
+      try {
+        const results = installComponents(
+          db,
+          install,
+          scope === "project" ? { projectPath: process.cwd() } : {},
+        );
+        for (const r of results) {
+          console.error(
+            r.status === "installed"
+              ? `  installed ${r.componentRef}`
+              : `  FAILED ${r.componentRef} — ${r.detail ?? "unknown error"}`,
+          );
+        }
+        console.error("gen-claudemd: inventory re-scanned.");
+      } catch (err) {
+        if (err instanceof InstallUnavailableError) {
+          console.error(`gen-claudemd: ${err.message}`);
+          process.exitCode = 1;
+          return;
+        }
+        throw err;
+      }
+    }
+  });
 
 program
   .command("serve")
@@ -195,6 +289,46 @@ interface RecommendCliOptions {
   provider?: ProviderName;
   yes?: boolean;
   cache?: boolean;
+}
+
+/** Parsed `gen-claudemd` flags (PRD §4.5, Milestone D). */
+interface GenClaudeMdCliOptions {
+  scope?: string;
+  path?: string;
+  fromRecommend?: string;
+  components?: string;
+  write?: boolean;
+  install?: boolean;
+  yes?: boolean;
+}
+
+/** Split a comma-separated CLI list into trimmed, non-empty refs. */
+function splitList(value: string): string[] {
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Explicit confirm gate for the install shell-out (UMB-140). State-changing, so
+ * it must be confirmed (or `--yes`) and refuses on a non-TTY without `--yes`
+ * rather than acting unattended.
+ */
+async function confirmInstall(refs: string[], yes: boolean): Promise<boolean> {
+  console.error(`About to \`claude plugin install\`: ${refs.join(", ")}`);
+  if (yes) return true;
+  if (!process.stdin.isTTY) {
+    console.error("gen-claudemd: not a TTY and --yes not given; declining install.");
+    return false;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question("Proceed with install? [y/N] ")).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
 }
 
 /** Coarse per-candidate token budget for the pre-call estimate (PRD §4.8). */
