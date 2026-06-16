@@ -1,0 +1,51 @@
+{
+  "name": "ccharness",
+  "version": "0.7.0",
+  "description": "Personal, local-first CLI that recommends a coherent, deconflicted Claude Code plugin/skill stack for the task you're working on.",
+  "type": "module",
+  "bin": {
+    "ccharness": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": "./dist/core/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "keywords": [
+    "claude-code",
+    "plugins",
+    "skills",
+    "recommender",
+    "cli",
+    "local-first"
+  ],
+  "author": "Dustin Powers (UMB Advisors)",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.8.0",
+    "commander": "^13.0.0",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
