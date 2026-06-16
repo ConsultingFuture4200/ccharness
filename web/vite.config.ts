@@ -1,0 +1,23 @@
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+/**
+ * Vite config for the read-only dashboard (PRD §4.6).
+ *
+ * In dev, `/api` is proxied to the `ccharness serve` API (default port 4575) so
+ * the SPA hits the same read-only core. Production build emits to `dist/`, which
+ * `ccharness serve` serves statically from `defaultWebRoot()`.
+ */
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      "/api": "http://127.0.0.1:4575",
+    },
+  },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+  },
+});

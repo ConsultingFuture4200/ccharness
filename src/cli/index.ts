@@ -21,6 +21,7 @@ import { CostAbortedError, recommend } from "../core/recommender/index.js";
 import type { ModelProvider } from "../core/recommender/provider.js";
 import { search, sync } from "../core/registry/sync.js";
 import type { Annotation, Component, InventoryItem, Recommendation, Scope } from "../core/types.js";
+import { defaultWebRoot, serve } from "../server/index.js";
 
 /**
  * `ccharness` CLI (PRD §5) — thin wrapper over `@ccharness/core`. Source of
@@ -240,7 +241,32 @@ program
   .command("serve")
   .option("--port <n>", "port", "4575")
   .description("launch the read-only dashboard on localhost (PRD §4.6)")
-  .action(() => notImplemented("serve", "Milestone E"));
+  .action(async (opts: { port?: string }) => {
+    const db = openStore();
+    const config = loadConfig();
+    const port = Number.parseInt(opts.port ?? "4575", 10);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      console.error(`serve: invalid port "${opts.port}".`);
+      process.exitCode = 1;
+      return;
+    }
+    const webRoot = defaultWebRoot();
+    try {
+      const { url } = await serve(
+        { db, config, projectPath: process.cwd(), ...(webRoot ? { webRoot } : {}) },
+        port,
+      );
+      console.error(`ccharness serve: read-only dashboard on ${url} (localhost only).`);
+      if (!webRoot) {
+        console.error(
+          "serve: web assets not built. Run `pnpm --dir web build`; the API is live in the meantime.",
+        );
+      }
+    } catch (err) {
+      console.error(`serve: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+    }
+  });
 
 /** One-line search result: name, trust tier, categories, context-cost (PRD §4.1). */
 function formatResult(c: Component): string {
@@ -435,14 +461,7 @@ function formatAnnotation(a: Annotation): string {
   return `[${tag}] (${a.kind}) ${a.message}`;
 }
 
-function notImplemented(cmd: string, milestone: string): never {
-  console.error(`ccharness ${cmd}: not yet implemented (${milestone}).`);
-  process.exitCode = 1;
-  throw new Error(`${cmd} not implemented`);
-}
-
 program.parseAsync().catch((err) => {
-  if (err instanceof Error && err.message.endsWith("not implemented")) return;
   console.error(err);
   process.exitCode = 1;
 });
