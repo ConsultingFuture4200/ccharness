@@ -177,3 +177,94 @@ export interface Recommendation {
 export interface ProviderProposal {
   lines: RecLine[];
 }
+
+/**
+ * How a tool_use in a session transcript was classified (README Roadmap: usage
+ * audit). A `plugin` is an MCP/plugin tool (`mcp__<server>__<tool>`), a `skill`
+ * is the `Skill` tool keyed by `input.skill`, and a `builtin` is everything else
+ * (Bash/Read/Edit/…). Built-ins are tracked informationally; the audit acts on
+ * plugins and skills, the components a user actually installs.
+ */
+export type UsageKind = "plugin" | "skill" | "builtin";
+
+/**
+ * One aggregated usage statistic over the operator's session transcripts
+ * (README Roadmap: usage/audit surface). Computed by `scanUsage` from
+ * `~/.claude/projects/**\/*.jsonl` — distinct (kind, name) keyed, with the raw
+ * call count, the number of distinct sessions it appeared in, and the most
+ * recent ISO timestamp it was invoked (file mtime fallback when an event
+ * carries no timestamp).
+ */
+export interface UsageStat {
+  kind: UsageKind;
+  /**
+   * Normalized invocation name: an MCP/plugin tool collapses to its server name
+   * (leading `plugin_` stripped, `__<tool>` suffix dropped); a skill is its
+   * `input.skill`; a builtin is the bare tool name.
+   */
+  name: string;
+  /** Total tool_use blocks seen for this (kind, name). */
+  calls: number;
+  /** Distinct sessions (by sessionId, file path fallback) it appeared in. */
+  sessions: number;
+  /** Most recent ISO timestamp it was invoked. */
+  lastUsed?: string;
+}
+
+/**
+ * One actionable usage suggestion (README Roadmap: trim/keep/add). Deterministic
+ * and derived purely from the usage scan joined against the installed inventory
+ * and the marketplace index — never a model call. `refs` are the component refs
+ * (or index ids) the suggestion concerns, so the CLI/dashboard can act on them.
+ */
+export interface Suggestion {
+  kind: "trim" | "keep" | "add" | "better-use";
+  title: string;
+  detail: string;
+  refs: string[];
+}
+
+/**
+ * A per-installed-component usage row in the audit (README Roadmap). Joins one
+ * inventory item to its usage and its index cost, so the report can rank by use,
+ * flag never-invoked components, and compute a cost-per-use for the costly ones.
+ */
+export interface AuditComponentUsage {
+  componentRef: string;
+  kind: "skill" | "plugin";
+  /** Category keys joined from the index (or derived), for category-aware advice. */
+  categoryTags: string[];
+  calls: number;
+  sessions: number;
+  lastUsed?: string;
+  /** Always-on token cost from the index, when known (PRD §4.1 `contextTokens`). */
+  contextTokens?: number;
+  /** `contextTokens / calls` when calls > 0 and a token cost is known. */
+  costPerUse?: number;
+}
+
+/**
+ * The full usage/audit report (README Roadmap: usage surface). Per-plugin/skill
+ * invocation counts across sessions, installed-but-unused detection, and the
+ * deterministic trim/keep/add/better-use suggestions — the narrative the
+ * operator sees rendered by `plugsmith usage`. Built entirely from local data
+ * (transcripts + store), no network and no model call.
+ */
+export interface AuditReport {
+  /** Inclusive window the scan covered, in days; undefined = all history. */
+  windowDays?: number;
+  /** Top plugin invocations across all sessions, calls-descending. */
+  topPlugins: UsageStat[];
+  /** Top skill invocations across all sessions, calls-descending. */
+  topSkills: UsageStat[];
+  /** Top built-in tool invocations — informational only, calls-descending. */
+  topBuiltins: UsageStat[];
+  /** Per-installed-component usage join, calls-descending. */
+  installed: AuditComponentUsage[];
+  /** Installed components with zero invocations in the window. */
+  unused: AuditComponentUsage[];
+  /** The operator's most-used categories, derived from used components. */
+  activeCategories: string[];
+  /** Deterministic trim/keep/add/better-use suggestions. */
+  suggestions: Suggestion[];
+}

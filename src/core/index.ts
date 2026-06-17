@@ -75,6 +75,16 @@ export { localProvider, type LocalProviderOptions } from "./recommender/provider
 export { selectProvider } from "./recommender/factory.js";
 export { estimateInputTokens } from "./recommender/providers/shared.js";
 
+// Usage / audit (README Roadmap: usage surface)
+export {
+  scanUsage,
+  classifyToolUse,
+  defaultUsageRoot,
+  type ScanUsageOptions,
+  type ScanUsageReport,
+} from "./usage/transcripts.js";
+export { buildAudit, type BuildAuditOptions } from "./usage/audit.js";
+
 // CLAUDE.md managed block (Milestone D)
 export { renderBlock, upsertBlock, writeBlockToFile, startDelimiter } from "./claudemd/block.js";
 export {

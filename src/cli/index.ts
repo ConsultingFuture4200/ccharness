@@ -25,13 +25,24 @@ import {
 } from "../core/recommender/index.js";
 import type { ModelProvider } from "../core/recommender/provider.js";
 import { search, sync } from "../core/registry/sync.js";
-import type { Annotation, Component, InventoryItem, Recommendation, Scope } from "../core/types.js";
+import { buildAudit } from "../core/usage/audit.js";
+import { scanUsage } from "../core/usage/transcripts.js";
+import type {
+  Annotation,
+  AuditReport,
+  Component,
+  InventoryItem,
+  Recommendation,
+  Scope,
+  UsageStat,
+} from "../core/types.js";
 import { defaultWebRoot, serve } from "../server/index.js";
 
 /**
  * `plugsmith` CLI (PRD §5) — thin wrapper over `@plugsmith/core`. Source of
- * truth for all state changes. The complete v1 command surface, no more:
- * sync, search, status, recommend, gen-claudemd, serve.
+ * truth for all state changes. The v1 command surface plus the usage/audit
+ * surface from the README Roadmap:
+ * sync, search, status, recommend, gen-claudemd, serve, usage.
  *
  * Commands are scaffolded with their PRD-locked signatures; each action is
  * wired to its core function as the corresponding milestone lands.
@@ -273,6 +284,42 @@ program
     }
   });
 
+program
+  .command("usage")
+  .option("--since <days>", "only count invocations within the last N days")
+  .option("--top <n>", "how many top plugins/skills to list", "10")
+  .option("--json", "emit the full AuditReport as JSON")
+  .description("audit real plugin/skill usage from session transcripts (README Roadmap)")
+  .action(async (opts: UsageCliOptions) => {
+    const sinceDays = opts.since != null ? Number.parseInt(opts.since, 10) : undefined;
+    if (sinceDays != null && (!Number.isInteger(sinceDays) || sinceDays <= 0)) {
+      console.error(`usage: invalid --since "${opts.since}" (expected a positive integer).`);
+      process.exitCode = 1;
+      return;
+    }
+    const top = Number.parseInt(opts.top ?? "10", 10);
+    if (!Number.isInteger(top) || top <= 0) {
+      console.error(`usage: invalid --top "${opts.top}" (expected a positive integer).`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const db = openStore();
+    const scan = await scanUsage(sinceDays != null ? { sinceDays } : {});
+    const report = scanInventory({ projectPath: process.cwd() });
+    const inventory = reconcile(db, report);
+    const audit = buildAudit(db, scan.stats, inventory, {
+      top,
+      ...(sinceDays != null ? { windowDays: sinceDays } : {}),
+    });
+
+    if (opts.json) {
+      console.log(JSON.stringify(audit, null, 2));
+      return;
+    }
+    printAudit(audit, scan.filesScanned, scan.totalCalls);
+  });
+
 /** One-line search result: name, trust tier, categories, context-cost (PRD §4.1). */
 function formatResult(c: Component): string {
   const categories = c.categoryTags.length > 0 ? c.categoryTags.join(", ") : "uncategorized";
@@ -360,6 +407,13 @@ interface RecommendCliOptions {
   provider?: ProviderName;
   yes?: boolean;
   cache?: boolean;
+}
+
+/** Parsed `usage` flags (README Roadmap: usage surface). */
+interface UsageCliOptions {
+  since?: string;
+  top?: string;
+  json?: boolean;
 }
 
 /** Parsed `gen-claudemd` flags (PRD §4.5, Milestone D). */
@@ -506,6 +560,50 @@ function surfaceMarker(c: Component | undefined): string {
 function formatAnnotation(a: Annotation): string {
   const tag = a.severity === "conflict" ? "CONFLICT" : a.severity === "warn" ? "warn" : "info";
   return `[${tag}] (${a.kind}) ${a.message}`;
+}
+
+/** One usage line: invocation count, distinct sessions, last-used date. */
+function formatUsageStat(s: UsageStat): string {
+  const last = s.lastUsed != null ? s.lastUsed.slice(0, 10) : "—";
+  return `${String(s.calls).padStart(5)}  ${s.name}  (${s.sessions} session(s), last ${last})`;
+}
+
+/**
+ * Print the usage/audit report as the operator narrative (README Roadmap): top
+ * plugins, top skills, installed-but-unused count, then the trim/keep/add
+ * suggestions. `--json` bypasses this for the raw AuditReport.
+ */
+function printAudit(audit: AuditReport, filesScanned: number, totalCalls: number): void {
+  const window = audit.windowDays != null ? ` (last ${audit.windowDays}d)` : "";
+  console.log(
+    `Usage audit${window}: ${totalCalls} tool calls across ${filesScanned} session file(s).`,
+  );
+
+  console.log("\nTop plugins:");
+  if (audit.topPlugins.length === 0) console.log("  (none)");
+  for (const s of audit.topPlugins) console.log(`  ${formatUsageStat(s)}`);
+
+  console.log("\nTop skills:");
+  if (audit.topSkills.length === 0) console.log("  (none)");
+  for (const s of audit.topSkills) console.log(`  ${formatUsageStat(s)}`);
+
+  const installedCount = audit.installed.length;
+  console.log(
+    `\nInstalled components: ${installedCount}; never invoked${window}: ${audit.unused.length}.`,
+  );
+  if (audit.activeCategories.length > 0) {
+    console.log(`Active categories: ${audit.activeCategories.slice(0, 5).join(", ")}.`);
+  }
+
+  console.log("\nSuggestions:");
+  if (audit.suggestions.length === 0) {
+    console.log("  (none)");
+  } else {
+    for (const s of audit.suggestions) {
+      console.log(`  [${s.kind.toUpperCase()}] ${s.title}`);
+      console.log(`          ${s.detail}`);
+    }
+  }
 }
 
 program.parseAsync().catch((err) => {
