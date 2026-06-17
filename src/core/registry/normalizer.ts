@@ -1,3 +1,4 @@
+import { inferCategories } from "../classify.js";
 import { categoryById, categoryByKey, singletonKeys } from "../taxonomy.js";
 import type { Component, ComponentBundles, TrustTier } from "../types.js";
 
@@ -208,7 +209,17 @@ function buildComponent(args: {
   /** When set, OR'd into the derived context-cost flag (local cache: >=1500 tokens). */
   forceContextCostly?: boolean | undefined;
 }): Component {
-  const categoryTags = tagsToCategories(args.tags);
+  // Primary signal: marketplace tags mapped onto taxonomy keys. When those map
+  // to nothing (the marketplace metadata leaves the component UNCATEGORIZED),
+  // fall back to inferring from the component's OWN text (name + description +
+  // tags) via the same `inferCategories` engine used for out-of-index skills —
+  // so the index itself is better-categorized and inference stays consistent
+  // whether a component is in the index or not. An entry that still infers
+  // nothing is rendered as genuinely unclassifiable, not guessed.
+  let categoryTags = tagsToCategories(args.tags);
+  if (categoryTags.length === 0) {
+    categoryTags = inferCategories([args.name, args.description ?? "", ...args.tags].join(" "));
+  }
   let contextCostFlag = deriveContextCost(args.bundles);
   // Refine with allowed-tools breadth where declared (PRD §4.1): a component
   // granted a large tool surface is treated as context-costly even without an

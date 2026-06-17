@@ -13,6 +13,9 @@ import {
   normalizeOfficial,
 } from "../src/core/registry/normalizer.js";
 import { search, sync } from "../src/core/registry/sync.js";
+import { singletonKeys } from "../src/core/taxonomy.js";
+
+const singletonCategorySet = new Set(singletonKeys());
 
 describe("normalizeCanonical — extended catalog real shape (PRD §4.1)", () => {
   // One entry of the REAL `marketplace.extended.json` `plugins` ARRAY: a single
@@ -91,6 +94,42 @@ describe("normalizeCanonical — extended catalog real shape (PRD §4.1)", () =>
       normalizeCanonical({ description: "no name" }, "canonical-catalog", "community"),
     ).toThrow(NormalizeError);
     expect(() => normalizeCanonical(null, "canonical-catalog", "community")).toThrow(NormalizeError);
+  });
+
+  it("falls back to inferring from name/description when marketplace tags do not map", () => {
+    // category + keywords are not in TAG_TO_CATEGORY → tagsToCategories returns
+    // []; the name/description carry a signal word ("semantic reasoning",
+    // "multi-agent") so the inferCategories fallback categorizes it.
+    const c = normalizeCanonical(
+      {
+        name: "neo",
+        description: "Multi-agent semantic reasoning and code suggestions",
+        category: "reasoning",
+        keywords: ["semantic"],
+      },
+      "canonical-catalog",
+      "partner",
+    );
+    expect(c.categoryTags).toContain("multi-agent"); // inferred from own text
+    // singletonCategories still derives off the (now inferred) categoryTags.
+    expect(c.singletonCategories).toEqual(
+      c.categoryTags.filter((k) => singletonCategorySet.has(k)),
+    );
+  });
+
+  it("does NOT use the fallback when marketplace tags already map", () => {
+    // "git" maps via TAG_TO_CATEGORY, so the description's signal words are
+    // ignored — mapped tags win and the inference fallback never runs.
+    const c = normalizeCanonical(
+      {
+        name: "committer",
+        description: "Multi-agent testing pipeline with review",
+        category: "git",
+      },
+      "canonical-catalog",
+      "partner",
+    );
+    expect(c.categoryTags).toEqual(["git"]); // only the mapped tag, no inference
   });
 });
 
