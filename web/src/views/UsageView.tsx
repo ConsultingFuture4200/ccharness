@@ -238,7 +238,7 @@ function OptimizationCard({ optimization }: { optimization: OptimizationDto }): 
         {hasWin && (
           <div className="shrink-0 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-right">
             <div className="font-mono text-2xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
-              ~{formatTokens(optimization.estimatedTokensReclaimable)}
+              {formatTokens(optimization.estimatedTokensReclaimable)}
             </div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
               reclaimable/turn
@@ -257,7 +257,7 @@ function OptimizationCard({ optimization }: { optimization: OptimizationDto }): 
                 <span className="text-sm font-medium">{a.title}</span>
                 {a.tokensReclaimable != null && (
                   <span className="font-mono text-xs text-emerald-700 dark:text-emerald-300">
-                    ~{formatTokens(a.tokensReclaimable)} tok
+                    {formatTokens(a.tokensReclaimable)}
                   </span>
                 )}
               </div>
