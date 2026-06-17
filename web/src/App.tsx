@@ -1,3 +1,4 @@
+import { ErrorBoundary } from "@/components/error-boundary";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -54,16 +55,24 @@ export function App(): React.JSX.Element {
 
           <main className="mt-6">
             <TabsContent value="index" className="focus-visible:outline-none">
-              <IndexView />
+              <ErrorBoundary>
+                <IndexView />
+              </ErrorBoundary>
             </TabsContent>
             <TabsContent value="status" className="focus-visible:outline-none">
-              <StatusView />
+              <ErrorBoundary>
+                <StatusView />
+              </ErrorBoundary>
             </TabsContent>
             <TabsContent value="usage" className="focus-visible:outline-none">
-              <UsageView />
+              <ErrorBoundary>
+                <UsageView />
+              </ErrorBoundary>
             </TabsContent>
             <TabsContent value="recommend" className="focus-visible:outline-none">
-              <RecommendView />
+              <ErrorBoundary>
+                <RecommendView />
+              </ErrorBoundary>
             </TabsContent>
           </main>
         </Tabs>

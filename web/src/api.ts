@@ -141,7 +141,8 @@ export interface AuditReportDto {
   unused: AuditComponentUsageDto[];
   activeCategories: string[];
   suggestions: SuggestionDto[];
-  optimization: OptimizationDto;
+  /** Optional: absent when served by an older plugsmith server (version skew). */
+  optimization?: OptimizationDto;
 }
 
 /** GET /api/usage envelope: the audit plus scan provenance counters. */

@@ -196,7 +196,7 @@ function UsageReport({
         scanned · window: {window}
       </p>
 
-      <OptimizationCard optimization={report.optimization} />
+      {report.optimization && <OptimizationCard optimization={report.optimization} />}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <TopChart title="Top plugins" stats={report.topPlugins} />
