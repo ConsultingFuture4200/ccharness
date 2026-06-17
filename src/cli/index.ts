@@ -32,6 +32,7 @@ import type {
   AuditReport,
   Component,
   InventoryItem,
+  Optimization,
   Recommendation,
   Scope,
   UsageStat,
@@ -569,6 +570,24 @@ function formatUsageStat(s: UsageStat): string {
 }
 
 /**
+ * Print the synthesized optimization plan (README Roadmap: "how to optimize
+ * plugin usage") prominently near the top of the usage narrative: the headline,
+ * the always-on tokens reclaimable, then the prioritized actions.
+ */
+function printOptimization(opt: Optimization): void {
+  console.log("\nOptimization:");
+  console.log(`  ${opt.headline}`);
+  if (opt.estimatedTokensReclaimable > 0) {
+    console.log(
+      `  Reclaimable: ~${formatTokens(opt.estimatedTokensReclaimable)} always-on tokens/turn.`,
+    );
+  }
+  for (const a of opt.actions) {
+    console.log(`  [${a.priority.toUpperCase()}] ${a.title} — ${a.detail}`);
+  }
+}
+
+/**
  * Print the usage/audit report as the operator narrative (README Roadmap): top
  * plugins, top skills, installed-but-unused count, then the trim/keep/add
  * suggestions. `--json` bypasses this for the raw AuditReport.
@@ -578,6 +597,8 @@ function printAudit(audit: AuditReport, filesScanned: number, totalCalls: number
   console.log(
     `Usage audit${window}: ${totalCalls} tool calls across ${filesScanned} session file(s).`,
   );
+
+  printOptimization(audit.optimization);
 
   console.log("\nTop plugins:");
   if (audit.topPlugins.length === 0) console.log("  (none)");

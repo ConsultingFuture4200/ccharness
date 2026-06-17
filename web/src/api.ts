@@ -115,6 +115,22 @@ export interface AuditComponentUsageDto {
   costPerUse?: number;
 }
 
+/** One prioritized optimization step (mirrors `OptimizationAction`). */
+export interface OptimizationActionDto {
+  priority: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  tokensReclaimable?: number;
+  refs: string[];
+}
+
+/** The synthesized optimization plan (mirrors `Optimization`, README Roadmap). */
+export interface OptimizationDto {
+  headline: string;
+  estimatedTokensReclaimable: number;
+  actions: OptimizationActionDto[];
+}
+
 /** The full usage/audit report (mirrors `AuditReport`, README Roadmap). */
 export interface AuditReportDto {
   windowDays?: number;
@@ -125,6 +141,7 @@ export interface AuditReportDto {
   unused: AuditComponentUsageDto[];
   activeCategories: string[];
   suggestions: SuggestionDto[];
+  optimization: OptimizationDto;
 }
 
 /** GET /api/usage envelope: the audit plus scan provenance counters. */

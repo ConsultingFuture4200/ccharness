@@ -244,6 +244,44 @@ export interface AuditComponentUsage {
 }
 
 /**
+ * One prioritized step in the optimization plan (README Roadmap: usage surface,
+ * "how to optimize plugin usage"). Synthesized from the deterministic
+ * {@link Suggestion} layer plus the token math, so each action carries a real,
+ * actionable token win where one exists. `tokensReclaimable` is the always-on
+ * (per-turn) token cost this action would free; `refs` are the component refs the
+ * action concerns, so the CLI/dashboard can act on them.
+ */
+export interface OptimizationAction {
+  priority: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  /** Always-on tokens this action reclaims per turn, when quantifiable. */
+  tokensReclaimable?: number;
+  refs: string[];
+}
+
+/**
+ * The synthesized optimization plan (README Roadmap: usage surface). The
+ * single-block answer to "how do I optimize my plugin usage" — a quantified,
+ * prioritized plan centered on reclaimable context tokens (the core plugsmith
+ * value: cut the token cost of plugins you don't need). Derived deterministically
+ * from the same joins that drive {@link Suggestion}; sits ON TOP of the granular
+ * `suggestions` array as the synthesis, never replacing it.
+ */
+export interface Optimization {
+  /** A single synthesized headline leading with the token win when there is one. */
+  headline: string;
+  /**
+   * Sum of always-on `contextTokens` over installed, context-costly components
+   * that were NEVER used in the window — the per-turn tokens reclaimable by
+   * disabling them.
+   */
+  estimatedTokensReclaimable: number;
+  /** Prioritized actions (high → low). */
+  actions: OptimizationAction[];
+}
+
+/**
  * The full usage/audit report (README Roadmap: usage surface). Per-plugin/skill
  * invocation counts across sessions, installed-but-unused detection, and the
  * deterministic trim/keep/add/better-use suggestions — the narrative the
@@ -267,4 +305,9 @@ export interface AuditReport {
   activeCategories: string[];
   /** Deterministic trim/keep/add/better-use suggestions. */
   suggestions: Suggestion[];
+  /**
+   * The synthesized optimization plan (the "how to optimize plugin usage"
+   * synthesis on top of `suggestions`), centered on reclaimable context tokens.
+   */
+  optimization: Optimization;
 }

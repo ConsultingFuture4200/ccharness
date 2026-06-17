@@ -205,4 +205,70 @@ describe("buildAudit (README Roadmap: trim/keep/add)", () => {
     expect(keep).toBeDefined();
     expect(keep?.title).toContain("earning its keep");
   });
+
+  it("synthesizes an optimization plan: idle costly plugins drive reclaimable tokens, heavily-used costly ones do not", () => {
+    upsertComponents(db, [
+      // Context-costly AND never used → its tokens are always-on for nothing.
+      component({
+        id: "idle-mcp@umb",
+        name: "idle-mcp",
+        categoryTags: ["integrations"],
+        contextCostFlag: true,
+        contextTokens: 2500,
+        bundles: { skills: [], commands: [], hooks: [], mcpServers: ["idle-server"] },
+      }),
+      // Context-costly but heavily used → earns its cost, NOT reclaimable.
+      component({
+        id: "linear@umb",
+        name: "linear",
+        categoryTags: ["integrations"],
+        contextCostFlag: true,
+        contextTokens: 4000,
+        bundles: { skills: [], commands: [], hooks: [], mcpServers: ["linear-staqs"] },
+      }),
+      // An installed skill that is never invoked → MEDIUM trim-skills action.
+      component({ id: "dormant-skill", name: "dormant-skill", categoryTags: ["domain"] }),
+    ]);
+
+    const inventory: InventoryItem[] = [
+      item("idle-mcp@umb", "plugin"),
+      item("linear@umb", "plugin"),
+      item("dormant-skill", "skill"),
+    ];
+
+    const usage = [
+      {
+        kind: "plugin" as const,
+        name: "linear-staqs",
+        calls: 30,
+        sessions: 5,
+        lastUsed: "2026-06-10T00:00:00.000Z",
+      },
+    ];
+
+    const audit = buildAudit(db, usage, inventory, { top: 8 });
+    const opt = audit.optimization;
+
+    // Only the idle costly plugin's tokens count — the heavily-used one does not.
+    expect(opt.estimatedTokensReclaimable).toBe(2500);
+
+    // HIGH "disable" action names the idle costly plugin and carries its tokens.
+    const disable = opt.actions.find((a) => a.priority === "high");
+    expect(disable).toBeDefined();
+    expect(disable?.title).toContain("Disable idle context-costly plugins");
+    expect(disable?.refs).toContain("idle-mcp@umb");
+    expect(disable?.refs).not.toContain("linear@umb");
+    expect(disable?.tokensReclaimable).toBe(2500);
+
+    // The heavily-used costly plugin must NOT be counted among the idle/unused.
+    expect(audit.unused.map((c) => c.componentRef)).not.toContain("linear@umb");
+
+    // Headline leads with the token win and is non-empty.
+    expect(opt.headline.length).toBeGreaterThan(0);
+    expect(opt.headline).toContain("always-on tokens/turn");
+
+    // The dormant skill drives a MEDIUM trim-skills action.
+    const trimSkills = opt.actions.find((a) => a.priority === "medium");
+    expect(trimSkills?.refs).toContain("dormant-skill");
+  });
 });

@@ -1,10 +1,13 @@
 import { getAllComponents, getComponent } from "../db/components.js";
 import type { DB } from "../db/store.js";
+import { formatTokens } from "../recommender/conflicts.js";
 import type {
   AuditComponentUsage,
   AuditReport,
   Component,
   InventoryItem,
+  Optimization,
+  OptimizationAction,
   Suggestion,
   UsageStat,
 } from "../types.js";
@@ -262,6 +265,113 @@ function buildSuggestions(
   return suggestions;
 }
 
+/** How many idle/keeper/skill refs to sample into an action's detail/refs. */
+const OPTIMIZATION_SAMPLE = 5;
+/** How many active categories the "Focus your stack" guidance leads with. */
+const FOCUS_CATEGORY_DEPTH = 3;
+
+/** A component carries an always-on token cost worth reclaiming. */
+function isContextCostly(row: AuditComponentUsage): boolean {
+  return (row.contextTokens ?? 0) > 0;
+}
+
+/**
+ * Synthesize the optimization plan (README Roadmap: "how to optimize plugin
+ * usage") from the already-computed joins — deterministic, no new data source.
+ * Sits on top of the granular {@link Suggestion} layer with the token math made
+ * explicit and prioritized: the reclaimable-token win leads, skill declutter and
+ * keepers follow.
+ *
+ * `estimatedTokensReclaimable` is the sum of always-on `contextTokens` over
+ * installed components that ARE context-costly (carry a token cost) AND were
+ * NEVER used (calls === 0) in the window — the tokens you pay every turn for
+ * nothing.
+ */
+function buildOptimization(
+  installed: AuditComponentUsage[],
+  unused: AuditComponentUsage[],
+  activeCategories: string[],
+): Optimization {
+  // Idle but context-costly: the always-on tokens reclaimable by disabling them.
+  const idleCostly = unused
+    .filter(isContextCostly)
+    .sort((a, z) => (z.contextTokens ?? 0) - (a.contextTokens ?? 0));
+  const estimatedTokensReclaimable = idleCostly.reduce((sum, c) => sum + (c.contextTokens ?? 0), 0);
+
+  const actions: OptimizationAction[] = [];
+
+  // HIGH: disable idle context-costly plugins — the headline token win.
+  if (idleCostly.length > 0) {
+    const names = idleCostly.slice(0, OPTIMIZATION_SAMPLE).map((c) => c.componentRef);
+    actions.push({
+      priority: "high",
+      title: "Disable idle context-costly plugins",
+      detail: `${names.join(", ")} — ~${formatTokens(estimatedTokensReclaimable)} always-on tokens reclaimed per turn.`,
+      tokensReclaimable: estimatedTokensReclaimable,
+      refs: idleCostly.map((c) => c.componentRef),
+    });
+  }
+
+  // MEDIUM: trim unused skills — low per-token, high clutter.
+  const installedSkills = installed.filter((c) => c.kind === "skill");
+  const unusedSkills = installedSkills.filter((c) => c.calls === 0);
+  if (unusedSkills.length > 0) {
+    actions.push({
+      priority: "medium",
+      title: "Trim unused skills",
+      detail: `${unusedSkills.length} of ${installedSkills.length} installed skills never invoked — trimming declutters suggestions and tool schemas (low per-token, high clutter).`,
+      refs: unusedSkills.slice(0, OPTIMIZATION_SAMPLE).map((c) => c.componentRef),
+    });
+  }
+
+  // LOW: keep the heavily-used context-costly components — they earn their cost.
+  const keepers = installed
+    .filter((c) => isContextCostly(c) && c.calls >= HEAVY_USE_CALLS)
+    .sort((a, z) => z.calls - a.calls || a.componentRef.localeCompare(z.componentRef));
+  if (keepers.length > 0) {
+    const names = keepers.slice(0, OPTIMIZATION_SAMPLE).map((c) => c.componentRef);
+    actions.push({
+      priority: "low",
+      title: "Keep what earns its keep",
+      detail: `keep ${names.join(", ")} — high use justifies their cost.`,
+      refs: keepers.map((c) => c.componentRef),
+    });
+  }
+
+  // LOW: focus the stack — guidance toward a per-task profile (roadmap idea).
+  const usedCount = installed.filter((c) => c.calls > 0).length;
+  if (activeCategories.length > 0 && usedCount > 0) {
+    const topCats = activeCategories.slice(0, FOCUS_CATEGORY_DEPTH);
+    actions.push({
+      priority: "low",
+      title: "Focus your stack",
+      detail: `Your work concentrates in ${topCats.join(", ")}; a focused profile of the ~${usedCount} components you actually use would cut per-session overhead.`,
+      refs: topCats,
+    });
+  }
+
+  // Headline: lead with the token win when there is one, else the declutter framing.
+  const topKeeper = keepers[0]?.componentRef;
+  let headline: string;
+  if (estimatedTokensReclaimable > 0) {
+    const parts = [
+      `Reclaim ~${formatTokens(estimatedTokensReclaimable)} always-on tokens/turn by disabling ${idleCostly.length} idle costly plugin(s)`,
+    ];
+    if (unusedSkills.length > 0) parts.push(`trim ${unusedSkills.length} unused skill(s)`);
+    if (topKeeper != null) parts.push(`keep ${topKeeper}`);
+    headline = `${parts.join("; ")}.`;
+  } else if (unusedSkills.length > 0) {
+    const keepClause = topKeeper != null ? `; keep ${topKeeper}` : "";
+    headline = `No idle always-on token cost to reclaim; trim ${unusedSkills.length} unused skill(s) to declutter suggestions and tool schemas${keepClause}.`;
+  } else if (topKeeper != null) {
+    headline = `Stack is lean — no idle costly plugins or unused skills; keep ${topKeeper}, it earns its cost.`;
+  } else {
+    headline = "Stack is lean — nothing idle to reclaim or trim in this window.";
+  }
+
+  return { headline, estimatedTokensReclaimable, actions };
+}
+
 /**
  * Build the full usage/audit report (README Roadmap: usage surface) from a usage
  * scan, the installed inventory, and the index `db`. Pure and deterministic.
@@ -297,6 +407,7 @@ export function buildAudit(
   const unused = installed.filter((c) => c.calls === 0);
   const activeCategories = deriveActiveCategories(installed);
   const suggestions = buildSuggestions(db, installed, unused, activeCategories);
+  const optimization = buildOptimization(installed, unused, activeCategories);
 
   const report: AuditReport = {
     topPlugins: topN(usage, "plugin", top),
@@ -306,6 +417,7 @@ export function buildAudit(
     unused,
     activeCategories,
     suggestions,
+    optimization,
   };
   if (opts.windowDays != null) report.windowDays = opts.windowDays;
   return report;

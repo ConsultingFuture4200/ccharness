@@ -1,6 +1,8 @@
 import {
   type AuditComponentUsageDto,
   type AuditReportDto,
+  type OptimizationActionDto,
+  type OptimizationDto,
   type SuggestionDto,
   type UsageDto,
   type UsageStatDto,
@@ -36,6 +38,7 @@ import {
   Play,
   Scissors,
   ShieldCheck,
+  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
@@ -193,6 +196,8 @@ function UsageReport({
         scanned · window: {window}
       </p>
 
+      <OptimizationCard optimization={report.optimization} />
+
       <div className="grid gap-4 lg:grid-cols-2">
         <TopChart title="Top plugins" stats={report.topPlugins} />
         <TopChart title="Top skills" stats={report.topSkills} />
@@ -202,6 +207,79 @@ function UsageReport({
 
       <Suggestions suggestions={report.suggestions} />
     </div>
+  );
+}
+
+/** Badge variant per action priority; the disable action warns, keepers stay positive. */
+function actionBadge(action: OptimizationActionDto): "warn" | "official" | "info" | "secondary" {
+  if (action.priority === "high") return "warn";
+  if (action.priority === "medium") return "info";
+  return action.tokensReclaimable != null ? "secondary" : "official";
+}
+
+/**
+ * The synthesized optimization plan (README Roadmap: "how to optimize plugin
+ * usage"), rendered prominently at the top of the report: the headline, a big
+ * reclaimable-tokens stat when there is a token win, then the prioritized actions
+ * with their refs as mono badges. Renders only what the server returned.
+ */
+function OptimizationCard({ optimization }: { optimization: OptimizationDto }): React.JSX.Element {
+  const hasWin = optimization.estimatedTokensReclaimable > 0;
+  return (
+    <Card className="border-emerald-500/30 bg-emerald-500/[0.04]">
+      <CardHeader className="gap-3 pb-3 sm:flex-row sm:items-start sm:justify-between sm:space-y-0">
+        <div className="space-y-1">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Zap className="h-4 w-4 text-emerald-500" aria-hidden />
+            Optimization
+          </CardTitle>
+          <p className="max-w-prose text-sm text-foreground">{optimization.headline}</p>
+        </div>
+        {hasWin && (
+          <div className="shrink-0 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-right">
+            <div className="font-mono text-2xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
+              ~{formatTokens(optimization.estimatedTokensReclaimable)}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              reclaimable/turn
+            </div>
+          </div>
+        )}
+      </CardHeader>
+      {optimization.actions.length > 0 && (
+        <CardContent className="space-y-3">
+          {optimization.actions.map((a) => (
+            <div key={`${a.priority}:${a.title}`} className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Badge variant={actionBadge(a)} className="font-normal uppercase">
+                  {a.priority}
+                </Badge>
+                <span className="text-sm font-medium">{a.title}</span>
+                {a.tokensReclaimable != null && (
+                  <span className="font-mono text-xs text-emerald-700 dark:text-emerald-300">
+                    ~{formatTokens(a.tokensReclaimable)} tok
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">{a.detail}</p>
+              {a.refs.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {a.refs.map((ref) => (
+                    <Badge
+                      key={ref}
+                      variant="outline"
+                      className="font-mono text-[10px] font-normal"
+                    >
+                      {ref}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </CardContent>
+      )}
+    </Card>
   );
 }
 
