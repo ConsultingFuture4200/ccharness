@@ -40,6 +40,15 @@ function isSkill(ref: string): boolean {
   return !ref.includes("@");
 }
 
+/**
+ * Whether an item is a skill, preferring the scanner-stamped `kind` and falling
+ * back to the ref shape (PRD §4.2). The `kind` column reads this so it matches
+ * the CLI's classification rather than re-deriving from the ref alone.
+ */
+function itemIsSkill(i: InventoryItemDto): boolean {
+  return i.kind != null ? i.kind === "skill" : isSkill(i.componentRef);
+}
+
 const chartConfig: ChartConfig = {
   count: { label: "Installed", color: "hsl(var(--chart-1))" },
 };
@@ -53,7 +62,7 @@ function indexRank(i: InventoryItemDto): number {
 /** Column comparators for the installed-components table (sortable headers). */
 const STATUS_SORT: Comparators<InventoryItemDto> = {
   component: (a, b) => a.componentRef.localeCompare(b.componentRef),
-  type: (a, b) => Number(isSkill(a.componentRef)) - Number(isSkill(b.componentRef)),
+  type: (a, b) => Number(itemIsSkill(a)) - Number(itemIsSkill(b)),
   scope: (a, b) => a.scope.localeCompare(b.scope),
   index: (a, b) => indexRank(a) - indexRank(b),
 };
@@ -72,7 +81,7 @@ function computeStats(items: InventoryItemDto[]): Stats {
   let notInIndex = 0;
   let contextCostly = 0;
   for (const i of items) {
-    if (isSkill(i.componentRef)) skills += 1;
+    if (itemIsSkill(i)) skills += 1;
     if (i.enabled) enabled += 1;
     if (i.resolved == null) notInIndex += 1;
     else if (i.resolved.contextCostFlag) contextCostly += 1;
@@ -82,14 +91,23 @@ function computeStats(items: InventoryItemDto[]): Stats {
 
 /**
  * Category distribution across installed components — the same summary as the
- * Index chart, over the operator's inventory. Unresolved items bucket into
- * "not in index" (the parallel of the Index chart's "uncategorized"). Renders
- * only counts the API already returned; the UI computes nothing the CLI cannot.
+ * Index chart, over the operator's inventory (PRD §4.2, §4.6). Index-resolved
+ * items count by their index category tags; out-of-index items count by the
+ * categories DERIVED from their own definition, so the "not in index" bucket
+ * shrinks to only the genuinely unclassifiable (no index annotation AND no
+ * inferred category). Renders only counts the API already returned.
  */
 function categoryDistribution(items: InventoryItemDto[]): Array<{ name: string; count: number }> {
   const counts = new Map<string, number>();
   for (const i of items) {
-    const cats = i.resolved == null ? ["not in index"] : categoriesOf(i.resolved.categoryTags);
+    let cats: string[];
+    if (i.resolved != null) {
+      cats = categoriesOf(i.resolved.categoryTags);
+    } else if (i.derived != null && i.derived.categoryTags.length > 0) {
+      cats = i.derived.categoryTags;
+    } else {
+      cats = ["not in index"];
+    }
     for (const cat of cats) counts.set(cat, (counts.get(cat) ?? 0) + 1);
   }
   return [...counts.entries()]
@@ -268,7 +286,7 @@ export function StatusView(): React.JSX.Element {
 }
 
 function StatusRow({ item }: { item: InventoryItemDto }): React.JSX.Element {
-  const skill = isSkill(item.componentRef);
+  const skill = itemIsSkill(item);
   return (
     <TableRow>
       <TableCell className="align-top">
@@ -301,27 +319,47 @@ function StatusRow({ item }: { item: InventoryItemDto }): React.JSX.Element {
         {item.scope}
       </TableCell>
       <TableCell className="align-top">
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
-          {item.resolved == null ? (
-            <Badge variant="warn">
-              <CircleSlash className="h-3 w-3" aria-hidden />
-              not in index
-            </Badge>
-          ) : (
-            <>
-              {categoriesOf(item.resolved.categoryTags).map((cat) => (
-                <Badge key={cat} variant="info" className="hidden font-normal lg:inline-flex">
-                  {cat}
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {item.resolved != null ? (
+              <>
+                {categoriesOf(item.resolved.categoryTags).map((cat) => (
+                  <Badge key={cat} variant="info" className="hidden font-normal lg:inline-flex">
+                    {cat}
+                  </Badge>
+                ))}
+                <Badge variant={item.resolved.trustTier}>{item.resolved.trustTier}</Badge>
+                {item.resolved.contextCostFlag && (
+                  <Badge variant="warn">
+                    <Zap className="h-3 w-3" aria-hidden />
+                    cost
+                  </Badge>
+                )}
+              </>
+            ) : item.derived != null ? (
+              <>
+                {/* Categories INFERRED from the component's own definition, not the
+                    marketplace index — the `derived` hint keeps that unambiguous. */}
+                {item.derived.categoryTags.map((cat) => (
+                  <Badge key={cat} variant="info" className="hidden font-normal lg:inline-flex">
+                    {cat}
+                  </Badge>
+                ))}
+                <Badge variant="secondary" className="font-normal">
+                  derived
                 </Badge>
-              ))}
-              <Badge variant={item.resolved.trustTier}>{item.resolved.trustTier}</Badge>
-              {item.resolved.contextCostFlag && (
-                <Badge variant="warn">
-                  <Zap className="h-3 w-3" aria-hidden />
-                  cost
-                </Badge>
-              )}
-            </>
+              </>
+            ) : (
+              <Badge variant="warn">
+                <CircleSlash className="h-3 w-3" aria-hidden />
+                not in index
+              </Badge>
+            )}
+          </div>
+          {item.derived?.description != null && (
+            <p className="line-clamp-2 max-w-[28rem] text-right text-xs text-muted-foreground">
+              {item.derived.description}
+            </p>
           )}
         </div>
       </TableCell>

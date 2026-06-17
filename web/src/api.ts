@@ -30,6 +30,17 @@ export interface InventoryItemDto {
     trustTier: "official" | "partner" | "community";
     contextCostFlag: boolean;
   } | null;
+  /** Whether the ref is a skill or a plugin (PRD §4.2). */
+  kind?: "skill" | "plugin";
+  /**
+   * Derived metadata for items not in the marketplace index, read from the
+   * component's own definition (PRD §4.2). Present only when `resolved` is null.
+   */
+  derived?: {
+    description?: string;
+    categoryTags: string[];
+    source: "skill-frontmatter" | "plugin-json";
+  };
 }
 
 export interface StatusDto {

@@ -314,17 +314,38 @@ function printStatus(db: DB, items: InventoryItem[]): void {
   }
 }
 
-/** One-line inventory entry: enabled marker, ref, provides, index status. */
+/** Truncate a description to ~maxLen chars on a word boundary, with an ellipsis. */
+function truncate(text: string, maxLen = 100): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= maxLen) return flat;
+  const cut = flat.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
+/**
+ * One-line inventory entry: enabled marker, ref, provides, index status (PRD
+ * §4.2). For items in the index we show the index annotation. For items NOT in
+ * the index we show the derived label read from their own definition — kind,
+ * inferred categories, and a truncated description — flagged `derived` so it's
+ * unambiguous the categories were inferred, not read from the marketplace index.
+ */
 function formatInventoryItem(item: InventoryItem): string {
   const state = item.enabled ? "[on] " : "[off]";
   let provides: string;
-  if (item.resolved == null) {
-    provides = "not in index";
-  } else {
+  if (item.resolved != null) {
     const tags = item.resolved.categoryTags;
     const cats = tags.length > 0 ? tags.join(", ") : "uncategorized";
     const cost = item.resolved.contextCostFlag ? ", context-costly" : "";
     provides = `${item.resolved.trustTier} — ${cats}${cost}`;
+  } else if (item.derived != null) {
+    const kind = item.kind ?? (item.componentRef.includes("@") ? "plugin" : "skill");
+    const cats =
+      item.derived.categoryTags.length > 0 ? item.derived.categoryTags.join(", ") : "unclassified";
+    const desc = item.derived.description ? ` — ${truncate(item.derived.description)}` : "";
+    provides = `[${kind}] derived: ${cats}${desc}`;
+  } else {
+    provides = "not in index";
   }
   return `${state} ${item.componentRef}  (${provides})`;
 }
