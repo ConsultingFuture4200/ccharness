@@ -14,8 +14,9 @@ function readInitialTheme(): Theme {
   if (typeof window === "undefined") return "dark";
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored === "light" || stored === "dark") return stored;
-  // Dark-mode-first: default to dark unless the OS explicitly prefers light.
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  // Dark-mode-first: default to dark regardless of OS preference. A user who
+  // wants light toggles it once and the choice persists in localStorage.
+  return "dark";
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
