@@ -190,3 +190,104 @@ describe("reconcile (PRD §4.2, Milestone B step 3)", () => {
     expect(getInventory(db)).toEqual([]);
   });
 });
+
+/**
+ * Derived metadata for out-of-index components (PRD §4.2). A skill carries a
+ * folded-scalar `description` in its SKILL.md frontmatter; the scan must capture
+ * it and `reconcile` must turn it into `derived` (description + inferred
+ * categories) for items not in the index, while index-resolved items keep their
+ * authoritative index annotation untouched.
+ */
+describe("derived metadata for not-in-index components (PRD §4.2)", () => {
+  let db: DB;
+  let root: string;
+
+  beforeEach(() => {
+    db = openStore(":memory:");
+    root = mkdtempSync(join(tmpdir(), "ccharness-derived-"));
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Write a SKILL.md with folded-scalar frontmatter under claudeHome/skills/<name>. */
+  function writeSkill(claudeHome: string, name: string, description: string): void {
+    const dir = join(claudeHome, "skills", name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: ${name}\ndescription: >\n  ${description}\ntags: [knowledge]\n---\n\n# ${name}\n`,
+    );
+  }
+
+  it("captures a folded-scalar description and kind at scan time", () => {
+    const claudeHome = join(root, "claude-home");
+    mkdirSync(claudeHome, { recursive: true });
+    writeSkill(claudeHome, "vault", "Capture session knowledge into the Obsidian vault as notes.");
+
+    const report = scanInventory({ basePaths: { claudeHome } });
+
+    const item = report.items.find((i) => i.componentRef === "vault");
+    expect(item?.kind).toBe("skill");
+
+    const input = report.derivedInputs.get("vault");
+    expect(input?.source).toBe("skill-frontmatter");
+    // The folded `>` scalar collapses to a single line — no leading/trailing noise.
+    expect(input?.description).toBe(
+      "Capture session knowledge into the Obsidian vault as notes.",
+    );
+  });
+
+  it("reconcile derives categories for a not-in-index skill, in-index item keeps its annotation", () => {
+    seedMarketplace(db);
+    // 'neo@parslee-marketplace' is in the index; the 'vault' skill is not.
+    upsertComponents(db, [seedComponent()]);
+    const claudeHome = join(root, "claude-home");
+    mkdirSync(claudeHome, { recursive: true });
+    writeFileSync(
+      join(claudeHome, "settings.json"),
+      JSON.stringify({ enabledPlugins: { "neo@parslee-marketplace": true } }),
+    );
+    writeSkill(claudeHome, "vault", "Capture session knowledge and memory into the vault.");
+
+    const items = reconcile(db, scanInventory({ basePaths: { claudeHome } }));
+
+    // In-index item: index annotation preserved, no derived block.
+    const neo = items.find((i) => i.componentRef === "neo@parslee-marketplace");
+    expect(neo?.resolved).toEqual({
+      categoryTags: ["multi-agent"],
+      trustTier: "partner",
+      contextCostFlag: true,
+    });
+    expect(neo?.derived).toBeUndefined();
+
+    // Out-of-index skill: derived description + inferred categories.
+    const vault = items.find((i) => i.componentRef === "vault");
+    expect(vault?.resolved).toBeNull();
+    expect(vault?.kind).toBe("skill");
+    expect(vault?.derived?.source).toBe("skill-frontmatter");
+    expect(vault?.derived?.categoryTags).toContain("memory");
+    expect(vault?.derived?.description).toContain("session knowledge");
+  });
+
+  it("skips a missing/malformed SKILL.md without failing the scan", () => {
+    const claudeHome = join(root, "claude-home");
+    // Skill dir with no SKILL.md, and one with malformed frontmatter.
+    mkdirSync(join(claudeHome, "skills", "no-md"), { recursive: true });
+    const bad = join(claudeHome, "skills", "bad-md");
+    mkdirSync(bad, { recursive: true });
+    writeFileSync(join(bad, "SKILL.md"), "---\nname: [unterminated\n---\n");
+
+    const report = scanInventory({ basePaths: { claudeHome } });
+
+    // Both dirs are still discovered as items; neither yields a derived input.
+    expect(report.items.map((i) => i.componentRef)).toEqual(
+      expect.arrayContaining(["no-md", "bad-md"]),
+    );
+    expect(report.derivedInputs.has("no-md")).toBe(false);
+    expect(report.derivedInputs.has("bad-md")).toBe(false);
+    expect(report.unreadable).toEqual([]);
+  });
+});

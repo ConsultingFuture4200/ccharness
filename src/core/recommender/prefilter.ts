@@ -1,3 +1,4 @@
+import { SIGNALS } from "../classify.js";
 import { getAllComponents, getComponentsByCategory } from "../db/components.js";
 import type { DB } from "../db/store.js";
 import { TAXONOMY } from "../taxonomy.js";
@@ -20,28 +21,6 @@ export interface PrefilterInput {
   breadth: "narrow" | "balanced" | "generous";
   integrations?: string[];
 }
-
-/**
- * Keyword/signal map: category key → words that, when seen in task prose,
- * suggest that category is relevant. Deliberately a hand-seeded map over the
- * taxonomy (PRD §3); it bounds the candidate set, it does NOT make the pick —
- * the LLM does that (PRD §4.3). Cheap to extend as the taxonomy evolves.
- */
-const SIGNALS: Record<string, string[]> = {
-  "project-mgmt": ["plan", "spec", "prd", "roadmap", "milestone", "requirements", "project", "phase"],
-  "context-mgmt": ["context", "token", "prompt", "window", "compaction", "summarize"],
-  memory: ["memory", "remember", "persist", "recall", "knowledge", "notes", "vault"],
-  "code-quality": ["lint", "format", "quality", "refactor", "clean", "style", "guardrail"],
-  security: ["security", "secret", "vulnerability", "supply chain", "audit", "credential", "cve"],
-  git: ["git", "commit", "branch", "rebase", "merge", "pull request", "pr", "vcs"],
-  "code-review": ["review", "pr review", "code review", "feedback", "critique"],
-  testing: ["test", "tdd", "coverage", "vitest", "jest", "pytest", "ci", "verify", "verification"],
-  "multi-agent": ["agent", "orchestrate", "orchestration", "multi-agent", "subagent", "pipeline", "swarm"],
-  observability: ["observability", "telemetry", "logging", "metrics", "trace", "monitor"],
-  integrations: ["mcp", "integration", "connector", "api", "slack", "github", "notion", "jira", "linear", "database", "postgres", "postgresql", "sql", "supabase", "stripe"],
-  domain: ["domain", "metrc", "shopify", "cannabis", "ecommerce", "amazon", "formulation"],
-  "output-styling": ["format output", "styling", "markdown", "render", "presentation", "report style"],
-};
 
 /** How many candidates the breadth knob admits (PRD §12 Q2). */
 const BREADTH_LIMITS: Record<PrefilterInput["breadth"], number> = {

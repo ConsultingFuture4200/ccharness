@@ -100,6 +100,28 @@ export interface InventoryItem {
   scannedAt: string;
   /** Annotation joined from the index; null when "installed, not in index". */
   resolved?: Pick<Component, "categoryTags" | "trustTier" | "contextCostFlag"> | null;
+  /**
+   * Which kind of component this ref is, read from the scan shape (PRD §4.2): a
+   * skill (bare directory name) or a plugin (`name@marketplace`). Undefined when
+   * the scan could not classify it.
+   */
+  kind?: "skill" | "plugin";
+  /**
+   * Derived metadata for an item that is NOT in the marketplace index, read from
+   * the component's own on-disk definition (PRD §4.2): a skill's SKILL.md
+   * frontmatter or a plugin's plugin.json. Lets `status` (CLI + dashboard) label
+   * an out-of-index component with a description and inferred categories instead
+   * of a bare "not in index". Populated by `reconcile` only when `resolved` is
+   * null; never overrides the authoritative index annotation.
+   */
+  derived?: {
+    /** Free-text description from the component's own definition, when present. */
+    description?: string;
+    /** Taxonomy keys inferred from name + description + tags (may be empty). */
+    categoryTags: string[];
+    /** Which on-disk definition the metadata was read from. */
+    source: "skill-frontmatter" | "plugin-json";
+  };
 }
 
 /** Recommender action verbs (PRD §4.3). */
